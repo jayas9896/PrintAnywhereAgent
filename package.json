@@ -9,7 +9,8 @@
     "dev": "tsx src/index.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
-    "release:build": "node ./scripts/build-release.mjs"
+    "release:build": "node ./scripts/build-release.mjs && node ./scripts/verify-release.mjs",
+    "release:verify": "node ./scripts/verify-release.mjs"
   },
   "dependencies": {
     "express": "^5.1.0",

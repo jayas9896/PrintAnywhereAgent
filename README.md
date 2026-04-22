@@ -11,6 +11,7 @@ The agent:
 - downloads encrypted print packets
 - decrypts them locally
 - prints them and reports status back
+- lets the approved shop owner publish and manage customer-facing platform printers from the local UI
 
 ## Release Bundle
 
@@ -25,7 +26,10 @@ That command builds the app and creates a versioned release bundle in `artifacts
 
 - `artifacts/printanywhere-agent-v<version>/`
 - `artifacts/printanywhere-agent-v<version>.tar.gz`
+- `artifacts/printanywhere-agent-v<version>.zip`
 - `artifacts/SHA256SUMS.txt`
+
+The release build now also verifies that the operator docs and runtime files are present in the assembled bundle.
 
 Each bundle contains only the operator-facing runtime assets:
 
@@ -52,6 +56,8 @@ On the shop PC, use the release bundle rather than the full source repo:
 6. Open `http://127.0.0.1:43100`.
 7. Enter the PrintAnywhere backend URL and save the registration.
 8. Give the pairing code to the PrintAnywhere admin.
+9. Wait for the admin to verify the business, set the official location, and approve the machine.
+10. After approval, publish customer-facing platform printers from the local Agent UI.
 
 The backend URL and display name are configured in the local UI, not in the env file.
 
@@ -132,6 +138,7 @@ The backend queues print jobs as encrypted packets. The agent decrypts them loca
 ## Docs
 
 - [docs/windows-setup.md](./docs/windows-setup.md) operator setup and pairing guide
+- [docs/operator-approval-and-recovery.md](./docs/operator-approval-and-recovery.md) approval-first onboarding, ownership boundaries, soft disable, and recovery flows
 - [docs/release-build.md](./docs/release-build.md) release bundle build process and artifact layout
 
 ## Backend Contract

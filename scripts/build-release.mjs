@@ -14,6 +14,7 @@ const artifactName = `printanywhere-agent-v${version}`
 const artifactsDir = path.join(repoRoot, 'artifacts')
 const bundleDir = path.join(artifactsDir, artifactName)
 const archivePath = path.join(artifactsDir, `${artifactName}.tar.gz`)
+const zipPath = path.join(artifactsDir, `${artifactName}.zip`)
 
 async function run(command, args, cwd = repoRoot) {
   await new Promise((resolve, reject) => {
@@ -57,6 +58,7 @@ await run(commandName('npm'), ['run', 'build'])
 
 await fs.rm(bundleDir, { recursive: true, force: true })
 await fs.rm(archivePath, { force: true })
+await fs.rm(zipPath, { force: true })
 await fs.mkdir(bundleDir, { recursive: true })
 
 await copy(path.join(repoRoot, 'dist'), path.join(bundleDir, 'dist'))
@@ -113,12 +115,40 @@ try {
   console.warn(`Skipping tar.gz archive creation: ${error instanceof Error ? error.message : String(error)}`)
 }
 
+let zipHash = null
+try {
+  if (process.platform === 'win32') {
+    await run('powershell.exe', [
+      '-NoProfile',
+      '-Command',
+      `Compress-Archive -Path "${bundleDir}\\*" -DestinationPath "${zipPath}" -Force`,
+    ])
+  } else {
+    await run('python3', [
+      '-c',
+      [
+        'import pathlib',
+        'import zipfile',
+        `bundle = pathlib.Path(${JSON.stringify(bundleDir)})`,
+        `zip_path = pathlib.Path(${JSON.stringify(zipPath)})`,
+        'with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:',
+        '    for path in bundle.rglob("*"):',
+        '        archive.write(path, path.relative_to(bundle.parent))',
+      ].join('\n'),
+    ])
+  }
+  zipHash = await hashFile(zipPath)
+} catch (error) {
+  console.warn(`Skipping zip archive creation: ${error instanceof Error ? error.message : String(error)}`)
+}
+
 const manifestHash = await hashFile(manifestPath)
 
 await writeText(
   path.join(artifactsDir, 'SHA256SUMS.txt'),
   [
     archiveHash ? `${archiveHash}  ${path.basename(archivePath)}` : null,
+    zipHash ? `${zipHash}  ${path.basename(zipPath)}` : null,
     `${manifestHash}  ${artifactName}/release-manifest.json`,
   ]
     .filter(Boolean)
@@ -129,4 +159,7 @@ await writeText(
 console.log(`Release bundle ready at ${bundleDir}`)
 if (archiveHash) {
   console.log(`Archive ready at ${archivePath}`)
+}
+if (zipHash) {
+  console.log(`Zip bundle ready at ${zipPath}`)
 }

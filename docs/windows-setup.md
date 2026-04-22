@@ -12,6 +12,7 @@ The agent runs on the Windows PC connected to the shop printers. It:
 - receives encrypted print jobs
 - decrypts them locally
 - prints them and reports status back
+- lets the approved shop owner publish and manage customer-facing platform printers from the local UI
 
 ## Prerequisites
 
@@ -94,7 +95,7 @@ Supported settings:
 
 The backend URL and display name are configured later in the local UI after the agent starts.
 
-## Agent Pairing Steps
+## Registration, approval, and first publish
 
 1. Start the agent.
 2. Open the local UI.
@@ -102,10 +103,12 @@ The backend URL and display name are configured later in the local UI after the 
 4. Optionally set a display name for the machine.
 5. Click `Save and register`.
 6. Copy the pairing code shown in the UI.
-7. In the PrintAnywhere admin portal, create a printer with routing mode `Print Agent`.
-8. Enter the pairing code and choose the reported Windows printer.
+7. Share the pairing code with the PrintAnywhere admin.
+8. Wait for the admin to verify the business manually, set the official business name and location, and approve the machine.
+9. Once the local UI shows the machine is approved, mark the Windows printers you want as shared.
+10. In the `Published platform printers` section, publish one or more customer-facing platform printers backed by those shared Windows printers.
 
-Once the admin saves the printer pairing, the agent becomes active and starts polling for jobs.
+Admin-side direct pairing in the main admin portal still exists as a break-glass or migration path, but it is not the normal owner onboarding flow anymore.
 
 ## Local Data And Security
 
@@ -134,11 +137,14 @@ Print packets are downloaded encrypted. The current implementation writes the de
 
 - Pairing codes are one-time and expire.
 - Use `Generate new pairing code` in the local UI and retry.
+- Ask the platform admin to use the new code and continue the approval flow.
 
 ### Jobs stay queued
 
 - Confirm the agent is still running.
+- Confirm the machine is still approved in the local UI.
 - Confirm the paired printer is still shared in the local UI.
+- Confirm the published platform printer is still enabled in the local UI.
 - Confirm the backend can reach `/api/agent/*` routes.
 
 ### Printing works in simulation but not on Windows
@@ -146,3 +152,8 @@ Print packets are downloaded encrypted. The current implementation writes the de
 - Set `PRINTANYWHERE_AGENT_SIMULATE_PRINT=false`.
 - Confirm the local Windows printer accepts direct PDF printing through the installed driver.
 - If needed, test with the exact printer name shown in the local UI.
+
+## Related docs
+
+- [operator-approval-and-recovery.md](./operator-approval-and-recovery.md)
+- [release-build.md](./release-build.md)

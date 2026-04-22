@@ -34,6 +34,7 @@ artifacts/
 │   │   └── run-agent.ps1
 │   └── start-agent.cmd
 └── printanywhere-agent-v<version>.tar.gz
+└── printanywhere-agent-v<version>.zip
 ```
 
 ## What Goes Into The Bundle
@@ -63,6 +64,17 @@ At minimum, validate:
 ```bash
 npm run build
 npm run release:build
+npm run release:verify
 ```
 
 If you are testing on Windows, also run the generated bundle with `scripts/run-agent.ps1` and confirm the local UI opens and real printers are listed.
+
+## Operator-facing docs that must ship in the bundle
+
+The release bundle is expected to include the approval-first operator guidance, not just the runtime files. The verification script checks for:
+
+- `README.md`
+- `docs/windows-setup.md`
+- `docs/operator-approval-and-recovery.md`
+- `config/agent.env.example`
+- prebuilt runtime files and launch scripts
