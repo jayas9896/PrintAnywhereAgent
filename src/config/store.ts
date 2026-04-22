@@ -1,0 +1,35 @@
+import fs from 'node:fs/promises'
+import path from 'node:path'
+import type { AgentState } from './types.js'
+import { resolveDataDir } from '../core/machine.js'
+
+const EMPTY_STATE: AgentState = {
+  sharedPrinters: {},
+  printers: [],
+}
+
+export class AgentStore {
+  readonly dataDir = resolveDataDir()
+  readonly statePath = path.join(this.dataDir, 'agent-state.json')
+
+  async load(): Promise<AgentState> {
+    await fs.mkdir(this.dataDir, { recursive: true })
+    try {
+      const raw = await fs.readFile(this.statePath, 'utf8')
+      return { ...EMPTY_STATE, ...JSON.parse(raw) }
+    } catch {
+      return { ...EMPTY_STATE }
+    }
+  }
+
+  async save(state: AgentState) {
+    await fs.mkdir(this.dataDir, { recursive: true })
+    await fs.writeFile(this.statePath, JSON.stringify(state, null, 2), 'utf8')
+  }
+
+  async tempFilePath(jobId: string) {
+    const dir = path.join(this.dataDir, 'tmp')
+    await fs.mkdir(dir, { recursive: true })
+    return path.join(dir, `${jobId}.pdf`)
+  }
+}

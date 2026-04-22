@@ -1,0 +1,24 @@
+{
+  "name": "printanywhere-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Windows-first PrintAnywhere Print Agent for public print-shop owners",
+  "scripts": {
+    "bootstrap:windows": "powershell -ExecutionPolicy Bypass -File ./scripts/bootstrap-windows.ps1",
+    "dev": "tsx src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "pdf-to-printer": "^5.6.0",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/node": "^24.12.2",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}
