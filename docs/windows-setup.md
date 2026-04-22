@@ -2,7 +2,7 @@
 
 This guide is for a print-shop owner machine that already has Windows printers installed.
 
-## What this agent does
+## What This Agent Does
 
 The agent runs on the Windows PC connected to the shop printers. It:
 
@@ -22,15 +22,47 @@ Install these on the Windows machine first:
 2. The local Windows printer drivers you want to share
 3. Access to the PrintAnywhere backend URL
 
-## One-time setup
+## Preferred Install: Release Bundle
 
-From the `PrintAnywhereAgent` repo root in PowerShell:
+If someone handed you a prebuilt `PrintAnywhereAgent` release bundle, use that folder instead of the source repo.
+
+One-time setup from PowerShell inside the extracted bundle:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-release.ps1
+```
+
+If you want the agent to start automatically when the Windows user signs in:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-release.ps1 -RegisterStartupTask
+```
+
+That installer:
+
+- checks that Node.js is installed
+- verifies the prebuilt runtime files are present
+- creates the local data directory
+- copies `config\agent.env` from the example file if needed
+- optionally registers a Windows Scheduled Task
+
+Then start the agent:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\run-agent.ps1
+```
+
+The release bundle also includes `install-agent.cmd` and `start-agent.cmd` wrappers for the same actions.
+
+## Alternative: Run From Source Repo
+
+If you are working directly from the git checkout instead of a release bundle:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap-windows.ps1
 ```
 
-If you want the agent to start automatically when the user signs in:
+If you want the source checkout to start automatically at Windows sign-in:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap-windows.ps1 -RegisterStartupTask
@@ -39,36 +71,43 @@ powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap-windows.ps1 -Regist
 That script:
 
 - checks that Node.js is installed
-- installs npm dependencies
+- installs npm dependencies with the lockfile
 - builds the agent
 - creates the local data directory
 - optionally registers a Windows Scheduled Task
 
-## Running the agent
-
-Manual start:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\run-agent.ps1
-```
+## Local Configuration
 
 Default local UI:
 
 - `http://127.0.0.1:43100`
 
-## Agent pairing steps
+Optional local overrides live in:
 
-1. Open the local UI.
-2. Enter the PrintAnywhere server URL.
-3. Optionally set a display name for the machine.
-4. Click `Save and register`.
-5. Copy the pairing code shown in the UI.
-6. In the PrintAnywhere admin portal, create a printer with routing mode `Print Agent`.
-7. Enter the pairing code and choose the reported Windows printer.
+- `config\agent.env`
+
+Supported settings:
+
+- `PRINTANYWHERE_AGENT_PORT`
+- `PRINTANYWHERE_AGENT_DATA_DIR`
+- `PRINTANYWHERE_AGENT_SIMULATE_PRINT`
+
+The backend URL and display name are configured later in the local UI after the agent starts.
+
+## Agent Pairing Steps
+
+1. Start the agent.
+2. Open the local UI.
+3. Enter the PrintAnywhere server URL.
+4. Optionally set a display name for the machine.
+5. Click `Save and register`.
+6. Copy the pairing code shown in the UI.
+7. In the PrintAnywhere admin portal, create a printer with routing mode `Print Agent`.
+8. Enter the pairing code and choose the reported Windows printer.
 
 Once the admin saves the printer pairing, the agent becomes active and starts polling for jobs.
 
-## Local data and security
+## Local Data And Security
 
 Default data directory:
 

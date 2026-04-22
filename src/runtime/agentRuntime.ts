@@ -1,5 +1,5 @@
 import os from 'node:os'
-import path from 'node:path'
+import crypto from 'node:crypto'
 import type { AgentState, LocalPrinter, PollJob } from '../config/types.js'
 import { AgentStore } from '../config/store.js'
 import { decryptJobPdf, decryptString, encryptString, generateRsaIdentity, unwrapJobKey } from '../core/crypto.js'
@@ -21,6 +21,9 @@ export class AgentRuntime {
     this.machineKey = await deriveMachineKey()
     this.state = await this.store.load()
     await this.ensureIdentity()
+    await this.ensureUiToken()
+    await this.cleanupTempFiles()
+    this.resetStatsIfNeeded()
     this.running = true
     await this.syncPrinters()
     this.heartbeatTimer = setInterval(() => {
@@ -39,8 +42,12 @@ export class AgentRuntime {
     return this.state
   }
 
+  verifyUiToken(token: string | null | undefined) {
+    return !!this.state.uiToken && !!token && this.state.uiToken === token
+  }
+
   async configure(serverUrl: string, displayName?: string | null) {
-    this.state.serverUrl = serverUrl.replace(/\/+$/, '')
+    this.state.serverUrl = normalizeServerUrl(serverUrl)
     this.state.displayName = displayName?.trim() || null
     this.state.lastError = null
     await this.store.save(this.state)
@@ -92,6 +99,16 @@ export class AgentRuntime {
       encryptedPrivateKeyPem: encryptString(rsaIdentity.privateKeyPem, this.machineKey),
     }
     await this.store.save(this.state)
+  }
+
+  private async ensureUiToken() {
+    if (this.state.uiToken) return
+    this.state.uiToken = crypto.randomBytes(24).toString('hex')
+    await this.store.save(this.state)
+  }
+
+  private async cleanupTempFiles() {
+    await this.store.cleanupTempFiles()
   }
 
   private requireIdentity() {
@@ -149,15 +166,17 @@ export class AgentRuntime {
   private async heartbeatTick() {
     if (!this.state.serverUrl || !this.state.registration) return
     try {
+      this.resetStatsIfNeeded()
       const client = this.requireClient()
       const printerStatuses = Object.fromEntries(this.state.printers.map((printer) => [printer.localPrinterName, printer.status]))
+      const stats = this.state.stats ?? defaultStats()
       const response = await client.heartbeat(this.requireAgentSecret(), {
         agentVersion: '0.1.0',
         uptimeSeconds: Math.floor((Date.now() - this.startedAt) / 1000),
         printerStatuses,
-        activeJobCount: 0,
-        completedJobsToday: 0,
-        failedJobsToday: 0,
+        activeJobCount: stats.activeJobCount,
+        completedJobsToday: stats.completedJobsToday,
+        failedJobsToday: stats.failedJobsToday,
         memoryUsageMb: Math.round(process.memoryUsage().rss / 1024 / 1024),
         diskFreeGb: 0,
       })
@@ -179,6 +198,10 @@ export class AgentRuntime {
         await sleep(2000)
         continue
       }
+      if (this.state.registration.status === 'REVOKED') {
+        await sleep(5000)
+        continue
+      }
       try {
         const client = this.requireClient()
         const sharedPrinterNames = this.state.printers.filter((printer) => printer.shared).map((printer) => printer.localPrinterName)
@@ -197,13 +220,17 @@ export class AgentRuntime {
 
   private async processJob(client: CloudApiClient, job: PollJob) {
     const secret = this.requireAgentSecret()
+    this.resetStatsIfNeeded()
+    this.bumpActiveJobs(1)
     try {
       await client.updateStatus(secret, job.jobId, {
+        leaseToken: job.leaseToken,
         status: 'DOWNLOADING',
         printerStatusAfterJob: 'READY',
       })
-      const download = await client.download(job.downloadUrl)
+      const download = await client.download(secret, job.downloadUrl, job.leaseToken)
       await client.updateStatus(secret, job.jobId, {
+        leaseToken: job.leaseToken,
         status: 'DECRYPTING',
         printerStatusAfterJob: 'READY',
       })
@@ -214,30 +241,60 @@ export class AgentRuntime {
         (!isWindows() && process.env.PRINTANYWHERE_AGENT_SIMULATE_PRINT !== 'false')
       const printStart = Date.now()
       await client.updateStatus(secret, job.jobId, {
+        leaseToken: job.leaseToken,
         status: 'PRINTING',
         printerStatusAfterJob: 'READY',
       })
-      await printPdf(job.jobId, job.printerName, pdfBuffer, simulatePrint)
+      const tempPath = await this.store.tempFilePath(job.jobId)
+      await printPdf(tempPath, job.printerName, pdfBuffer, simulatePrint)
       await client.updateStatus(secret, job.jobId, {
+        leaseToken: job.leaseToken,
         status: 'COMPLETED',
         printerStatusAfterJob: 'READY',
         printDurationMs: Date.now() - printStart,
       })
+      this.bumpActiveJobs(-1)
+      this.bumpCompletedJobs()
       this.state.lastJob = {
         jobId: job.jobId,
         printerName: job.printerName,
         status: 'COMPLETED',
         updatedAt: new Date().toISOString(),
+      }
+      this.pushRecentJob({
+        jobId: job.jobId,
+        printerName: job.printerName,
+        status: 'COMPLETED',
+        updatedAt: new Date().toISOString(),
+        pickupCode: job.pickup?.code ?? null,
+        displayName: job.pickup?.displayName ?? null,
+        pageCount: job.pickup?.pageCount ?? null,
+      })
+      if (job.pickup?.code) {
+        this.state.readyForPickup = [
+          {
+            jobId: job.jobId,
+            printerName: job.printerName,
+            pickupCode: job.pickup.code,
+            displayName: job.pickup.displayName ?? null,
+            pageCount: job.pickup.pageCount ?? null,
+            completedAt: new Date().toISOString(),
+          },
+          ...(this.state.readyForPickup ?? []).filter((entry) => entry.jobId !== job.jobId),
+        ].slice(0, 30)
       }
       this.state.lastError = null
       await this.store.save(this.state)
     } catch (error) {
       const failureReason = error instanceof Error ? error.message : 'Print job failed'
       await client.updateStatus(secret, job.jobId, {
+        leaseToken: job.leaseToken,
         status: 'FAILED',
         printerStatusAfterJob: 'ERROR',
         failureReason,
       }).catch(() => undefined)
+      this.bumpActiveJobs(-1)
+      this.bumpFailedJobs()
       this.state.lastJob = {
         jobId: job.jobId,
         printerName: job.printerName,
@@ -245,12 +302,104 @@ export class AgentRuntime {
         updatedAt: new Date().toISOString(),
         failureReason,
       }
+      this.pushRecentJob({
+        jobId: job.jobId,
+        printerName: job.printerName,
+        status: 'FAILED',
+        updatedAt: new Date().toISOString(),
+        pickupCode: job.pickup?.code ?? null,
+        displayName: job.pickup?.displayName ?? null,
+        pageCount: job.pickup?.pageCount ?? null,
+        failureReason,
+      })
       this.state.lastError = failureReason
       await this.store.save(this.state)
     }
+  }
+
+  async markCollected(jobId: string) {
+    const secret = this.requireAgentSecret()
+    const client = this.requireClient()
+    await client.updateStatus(secret, jobId, {
+      status: 'COLLECTED',
+      printerStatusAfterJob: 'READY',
+    })
+    const now = new Date().toISOString()
+    this.state.readyForPickup = (this.state.readyForPickup ?? []).filter((entry) => entry.jobId !== jobId)
+    this.pushRecentJob({
+      jobId,
+      printerName:
+        this.state.recentJobs?.find((entry) => entry.jobId === jobId)?.printerName ?? 'Unknown printer',
+      status: 'COLLECTED',
+      updatedAt: now,
+    })
+    this.state.lastJob = {
+      jobId,
+      printerName: this.state.lastJob?.jobId === jobId ? this.state.lastJob.printerName : 'Unknown printer',
+      status: 'COLLECTED',
+      updatedAt: now,
+    }
+    await this.store.save(this.state)
+  }
+
+  private resetStatsIfNeeded() {
+    const today = new Date().toISOString().slice(0, 10)
+    if (!this.state.stats || this.state.stats.statsDate !== today) {
+      this.state.stats = {
+        statsDate: today,
+        activeJobCount: 0,
+        completedJobsToday: 0,
+        failedJobsToday: 0,
+      }
+    }
+  }
+
+  private bumpActiveJobs(delta: number) {
+    this.resetStatsIfNeeded()
+    const stats = this.state.stats ?? defaultStats()
+    stats.activeJobCount = Math.max(0, stats.activeJobCount + delta)
+    this.state.stats = stats
+  }
+
+  private bumpCompletedJobs() {
+    this.resetStatsIfNeeded()
+    const stats = this.state.stats ?? defaultStats()
+    stats.completedJobsToday += 1
+    this.state.stats = stats
+  }
+
+  private bumpFailedJobs() {
+    this.resetStatsIfNeeded()
+    const stats = this.state.stats ?? defaultStats()
+    stats.failedJobsToday += 1
+    this.state.stats = stats
+  }
+
+  private pushRecentJob(entry: NonNullable<AgentState['recentJobs']>[number]) {
+    this.state.recentJobs = [entry, ...(this.state.recentJobs ?? []).filter((job) => job.jobId !== entry.jobId)].slice(0, 50)
   }
 }
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function normalizeServerUrl(raw: string) {
+  const value = raw.trim().replace(/\/+$/, '')
+  const url = new URL(value)
+  const isLoopback = ['127.0.0.1', 'localhost', '::1'].includes(url.hostname)
+  const allowInsecure = process.env.PRINTANYWHERE_AGENT_ALLOW_INSECURE_BACKEND === 'true'
+  if (url.protocol !== 'https:' && !isLoopback && !allowInsecure) {
+    throw new Error('PrintAnywhere backend URL must use HTTPS unless it is localhost or insecure mode is explicitly enabled')
+  }
+  return value
+}
+
+function defaultStats() {
+  return {
+    statsDate: new Date().toISOString().slice(0, 10),
+    activeJobCount: 0,
+    completedJobsToday: 0,
+    failedJobsToday: 0,
+  }
 }

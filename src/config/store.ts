@@ -32,4 +32,14 @@ export class AgentStore {
     await fs.mkdir(dir, { recursive: true })
     return path.join(dir, `${jobId}.pdf`)
   }
+
+  async cleanupTempFiles() {
+    const dir = path.join(this.dataDir, 'tmp')
+    try {
+      const entries = await fs.readdir(dir)
+      await Promise.all(entries.map((entry) => fs.rm(path.join(dir, entry), { force: true })))
+    } catch {
+      return
+    }
+  }
 }

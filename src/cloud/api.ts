@@ -13,7 +13,8 @@ const pollResponseSchema = z.object({
   jobId: z.string(),
   printerName: z.string(),
   downloadUrl: z.string().url(),
-  downloadUrlExpiresAt: z.string(),
+  leaseExpiresAt: z.string(),
+  leaseToken: z.string(),
   encryptedJobKey: z.string(),
   settings: z.record(z.string(), z.unknown()),
   pickup: z
@@ -75,8 +76,12 @@ export class CloudApiClient {
     return pollResponseSchema.parse(await response.json())
   }
 
-  async download(downloadUrl: string) {
-    const response = await fetch(downloadUrl)
+  async download(agentSecret: string, downloadUrl: string, leaseToken: string) {
+    const url = new URL(downloadUrl)
+    url.searchParams.set('lease', leaseToken)
+    const response = await fetch(url, {
+      headers: { authorization: `Bearer ${agentSecret}` },
+    })
     if (!response.ok) throw new Error(await response.text())
     const ciphertext = Buffer.from(await response.arrayBuffer())
     return {
@@ -90,6 +95,7 @@ export class CloudApiClient {
     agentSecret: string,
     jobId: string,
     payload: {
+      leaseToken?: string | null
       status: AgentJobQueueStatus
       printerStatusAfterJob?: AgentPrinterStatus | null
       printDurationMs?: number | null

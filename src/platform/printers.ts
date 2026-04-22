@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises'
+import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
@@ -71,7 +72,7 @@ export async function discoverPrinters(sharedPrinters: Record<string, boolean>):
   }))
 }
 
-export async function printPdf(jobId: string, printerName: string, pdfBuffer: Buffer, simulate = false) {
+export async function printPdf(tempPath: string, printerName: string, pdfBuffer: Buffer, simulate = false) {
   if (simulate || !isWindows()) {
     await new Promise((resolve) => setTimeout(resolve, 1500))
     return
@@ -80,12 +81,10 @@ export async function printPdf(jobId: string, printerName: string, pdfBuffer: Bu
   const { print } = (await import('pdf-to-printer')) as unknown as {
     print: (filePath: string, options: { printer: string }) => Promise<void>
   }
-  const tempDir = new URL('../../data/tmp/', import.meta.url)
-  await fs.mkdir(tempDir, { recursive: true })
-  const tempPath = new URL(`${jobId}.pdf`, tempDir)
+  await fs.mkdir(path.dirname(tempPath), { recursive: true })
   await fs.writeFile(tempPath, pdfBuffer)
   try {
-    await print(fileURLToPath(tempPath), { printer: printerName })
+    await print(tempPath, { printer: printerName })
   } finally {
     await fs.rm(tempPath, { force: true })
   }

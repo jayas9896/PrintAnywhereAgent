@@ -43,23 +43,55 @@ export interface LastJobSnapshot {
   failureReason?: string | null
 }
 
+export interface RecentJobSnapshot {
+  jobId: string
+  printerName: string
+  status: AgentJobQueueStatus
+  updatedAt: string
+  pickupCode?: string | null
+  displayName?: string | null
+  pageCount?: number | null
+  failureReason?: string | null
+}
+
+export interface PickupJobSnapshot {
+  jobId: string
+  printerName: string
+  pickupCode: string
+  displayName?: string | null
+  pageCount?: number | null
+  completedAt: string
+}
+
+export interface AgentStats {
+  statsDate: string
+  activeJobCount: number
+  completedJobsToday: number
+  failedJobsToday: number
+}
+
 export interface AgentState {
   serverUrl?: string | null
   displayName?: string | null
   identity?: StoredIdentity | null
   registration?: AgentRegistrationState | null
+  uiToken?: string | null
   sharedPrinters: Record<string, boolean>
   printers: LocalPrinter[]
   lastHeartbeatAt?: string | null
   lastError?: string | null
   lastJob?: LastJobSnapshot | null
+  recentJobs?: RecentJobSnapshot[]
+  readyForPickup?: PickupJobSnapshot[]
+  stats?: AgentStats | null
 }
 
 export interface PollJob {
   jobId: string
   printerName: string
   downloadUrl: string
-  downloadUrlExpiresAt: string
+  leaseExpiresAt: string
+  leaseToken: string
   encryptedJobKey: string
   settings: Record<string, unknown>
   pickup?: {

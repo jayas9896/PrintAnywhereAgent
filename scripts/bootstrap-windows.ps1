@@ -9,7 +9,11 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $repoRoot
 
-if (-not $IsWindows) {
+$isWindowsPlatform = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
+    [System.Runtime.InteropServices.OSPlatform]::Windows
+)
+
+if (-not $isWindowsPlatform) {
     throw "This bootstrap script is intended for Windows."
 }
 
@@ -30,7 +34,7 @@ if ([string]::IsNullOrWhiteSpace($DataDir)) {
 New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
 
 Write-Host "Installing dependencies..."
-npm install
+npm ci
 
 Write-Host "Building agent..."
 npm run build
@@ -57,5 +61,3 @@ Write-Host ""
 Write-Host "Server URL guidance:"
 Write-Host "- Local test backend: http://127.0.0.1:38080 or the deployed public backend URL"
 Write-Host "- The backend must expose the Print Agent API routes under /api/agent/*"
-
-Start-Process "http://127.0.0.1:$Port" | Out-Null

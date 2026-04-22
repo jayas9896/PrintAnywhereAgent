@@ -1,6 +1,6 @@
 # PrintAnywhereAgent
 
-`PrintAnywhereAgent` is the separate Windows-first printer bridge for PrintAnywhere. It is intended to be distributed to public print-shop owners who want to expose their local printers to the PrintAnywhere backend without running the backend on the same Windows machine.
+`PrintAnywhereAgent` is the separate Windows-first printer bridge for PrintAnywhere. It is meant to be handed to a public print-shop owner as a prebuilt local agent that exposes that shop's Windows printers to the PrintAnywhere backend.
 
 The agent:
 
@@ -12,25 +12,50 @@ The agent:
 - decrypts them locally
 - prints them and reports status back
 
-## Runtime model
+## Release Bundle
 
-Windows:
+Preferred distribution flow for production handoff:
 
-- printer discovery uses PowerShell
-- printing uses `pdf-to-printer`
+```bash
+npm ci
+npm run release:build
+```
 
-Non-Windows development:
+That command builds the app and creates a versioned release bundle in `artifacts/`:
 
-- printer discovery falls back to mock printers
-- print execution simulates success by default
+- `artifacts/printanywhere-agent-v<version>/`
+- `artifacts/printanywhere-agent-v<version>.tar.gz`
+- `artifacts/SHA256SUMS.txt`
 
-Important implementation note:
+Each bundle contains only the operator-facing runtime assets:
 
-- Decrypted PDFs are written to a short-lived temp file and deleted immediately after printing.
-- That is the pragmatic JavaScript path for Windows printing today.
-- If exact in-memory spool delivery is required later, that should move to a native Windows bridge.
+- prebuilt `dist/`
+- production-only `node_modules/`
+- `config/agent.env.example`
+- Windows install/start helpers
+- operator docs
 
-## Quick start
+## Windows Operator Quick Start
+
+On the shop PC, use the release bundle rather than the full source repo:
+
+1. Extract `printanywhere-agent-v<version>`.
+2. Run `install-agent.cmd` once.
+3. If you want the agent to start automatically at sign-in, run:
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\scripts\install-release.ps1 -RegisterStartupTask
+   ```
+
+4. Review `config\agent.env` if you want to change the local UI port, data directory, or simulation mode.
+5. Start the agent with `start-agent.cmd`.
+6. Open `http://127.0.0.1:43100`.
+7. Enter the PrintAnywhere backend URL and save the registration.
+8. Give the pairing code to the PrintAnywhere admin.
+
+The backend URL and display name are configured in the local UI, not in the env file.
+
+## Development From Source
 
 Development:
 
@@ -47,47 +72,41 @@ npm run build
 npm start
 ```
 
-Default local UI:
-
-- `http://127.0.0.1:43100`
-
-## Windows operator setup
-
-For real Windows shop machines, use the provided PowerShell bootstrap:
+Source-repo Windows setup:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap-windows.ps1
 ```
 
-To also register the agent to start automatically at Windows sign-in:
+Default local UI:
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap-windows.ps1 -RegisterStartupTask
-```
+- `http://127.0.0.1:43100`
 
-Then run:
+## Runtime Model
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\run-agent.ps1
-```
+Windows:
 
-Detailed operator guide:
+- printer discovery uses PowerShell
+- printing uses `pdf-to-printer`
 
-- [docs/windows-setup.md](./docs/windows-setup.md)
+Non-Windows development:
 
-## Pairing flow
+- printer discovery falls back to mock printers
+- print execution simulates success by default
 
-1. Open the local UI.
-2. Enter the PrintAnywhere server URL.
-3. Optionally set a display name for the machine.
-4. Click `Save and register`.
-5. Copy the pairing code.
-6. Give the pairing code to the PrintAnywhere admin.
-7. The admin creates a `Print Agent` printer and chooses one of the printers reported by this agent.
+Important implementation note:
 
-After pairing, the agent becomes active and starts polling for work.
+- Decrypted PDFs are written to a short-lived temp file inside the configured data directory and deleted immediately after printing.
+- That is the pragmatic JavaScript path for Windows printing today.
+- If exact in-memory spool delivery is required later, that should move to a native Windows bridge.
 
-## Environment variables
+## Local Configuration
+
+Sample env file:
+
+- `config/agent.env.example`
+
+Supported runtime variables:
 
 - `PRINTANYWHERE_AGENT_PORT`
   - local UI port
@@ -97,9 +116,9 @@ After pairing, the agent becomes active and starts polling for work.
   - default: `./data`
 - `PRINTANYWHERE_AGENT_SIMULATE_PRINT`
   - force simulated print completion
-  - default: `true` on non-Windows, `false` on Windows
+  - default: `false` on Windows, `true` on non-Windows
 
-## Security model
+## Security Model
 
 The agent stores:
 
@@ -110,7 +129,12 @@ The agent stores:
 
 The backend queues print jobs as encrypted packets. The agent decrypts them locally and never needs raw backend database access or printer credentials from other integrations.
 
-## Backend contract
+## Docs
+
+- [docs/windows-setup.md](./docs/windows-setup.md) operator setup and pairing guide
+- [docs/release-build.md](./docs/release-build.md) release bundle build process and artifact layout
+
+## Backend Contract
 
 This repo targets the backend Print Agent API exposed by the main `PrintAnywhere` backend:
 
@@ -122,13 +146,14 @@ This repo targets the backend Print Agent API exposed by the main `PrintAnywhere
 - `POST /api/agent/heartbeat`
 - `POST /api/agent/repair`
 
-## Key files
+## Key Files
 
 - `src/index.ts` bootstrap entry
 - `src/runtime/agentRuntime.ts` background runtime and polling loop
 - `src/cloud/api.ts` backend API client
 - `src/platform/printers.ts` local printer discovery and print execution
 - `src/ui/server.ts` local operator UI
-- `scripts/discover-printers.ps1` Windows printer discovery script
-- `scripts/bootstrap-windows.ps1` Windows setup helper
-- `scripts/run-agent.ps1` production-style local launcher
+- `scripts/build-release.mjs` release artifact assembler
+- `scripts/install-release.ps1` Windows install helper for prebuilt bundles
+- `scripts/bootstrap-windows.ps1` Windows setup helper for source checkouts
+- `scripts/run-agent.ps1` production-style launcher with optional env-file support
