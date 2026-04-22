@@ -164,3 +164,17 @@ This repo targets the backend Print Agent API exposed by the main `PrintAnywhere
 - `scripts/install-release.ps1` Windows install helper for prebuilt bundles
 - `scripts/bootstrap-windows.ps1` Windows setup helper for source checkouts
 - `scripts/run-agent.ps1` production-style launcher with optional env-file support
+
+---
+
+## ⚠️ HUMAN REVIEW REQUIRED
+
+The following items were reviewed by an AI agent audit pass:
+
+### Security Audit Result
+- **No issues found.** The agent's crypto (AES-256-GCM, RSA-OAEP), loopback-only UI binding, HTML escaping, Zod input validation, and secret management were all verified as sound.
+- **No code changes were made** to this repository during the audit.
+
+### Operator Reminder
+- The agent stores encrypted secrets in `data/agent-state.json`. Ensure this directory has appropriate filesystem permissions (owner-only read/write) on production Windows machines.
+- The `PRINTANYWHERE_AGENT_SIMULATE_PRINT` env var defaults to `false` on Windows. Verify it is not accidentally set to `true` in production.
