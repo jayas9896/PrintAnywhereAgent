@@ -1,6 +1,16 @@
 import os from 'node:os'
 import crypto from 'node:crypto'
-import type { AgentState, LocalPrinter, PollJob } from '../config/types.js'
+import type {
+  AgentState,
+  ConfiguredConstraint,
+  LocalPrinter,
+  PlatformColorMode,
+  PlatformPageSize,
+  PlatformPrinterStatus,
+  PlatformScalingMode,
+  PlatformSidesMode,
+  PollJob,
+} from '../config/types.js'
 import { AgentStore } from '../config/store.js'
 import { decryptJobPdf, decryptString, encryptString, generateRsaIdentity, unwrapJobKey } from '../core/crypto.js'
 import { deriveMachineKey, getMachineId, isWindows } from '../core/machine.js'
@@ -62,6 +72,57 @@ export class AgentRuntime {
     )
     await this.store.save(this.state)
     await this.reportPrinters()
+    await this.refreshCloudState()
+  }
+
+  async upsertPlatformPrinter(input: PlatformPrinterUpsertInput) {
+    const client = this.requireClient()
+    const secret = this.requireAgentSecret()
+    const payload = {
+      name: input.name.trim(),
+      agentPrinterName: input.agentPrinterName.trim(),
+      enabled: input.enabled,
+      status: input.status,
+      glossyPaperSurchargeMinor: input.glossyPaperSurchargeMinor,
+      baseJobPriceMinor: input.baseJobPriceMinor,
+      monochromePagePriceMinor: input.monochromePagePriceMinor,
+      colorPagePriceMinor: input.colorPagePriceMinor,
+      duplexSheetSurchargeMinor: input.duplexSheetSurchargeMinor,
+      a3PageSurchargeMinor: input.a3PageSurchargeMinor,
+      documentConstraints: input.documentConstraints,
+      pricingAdjustments: input.pricingAdjustments,
+      supportedColorModes: input.supportedColorModes,
+      supportedSidesModes: input.supportedSidesModes,
+      supportedPageSizes: input.supportedPageSizes,
+      supportedScalingModes: input.supportedScalingModes,
+      supportsSecureCoverSheets: input.supportsSecureCoverSheets,
+      secureCoverSheetPriceMinor: input.secureCoverSheetPriceMinor,
+      secureCoverSheetColorName: input.secureCoverSheetColorName.trim(),
+      secureCoverSheetLabel: input.secureCoverSheetLabel.trim(),
+    }
+    const saved = input.printerId
+      ? await client.updatePlatformPrinter(secret, input.printerId, payload)
+      : await client.createPlatformPrinter(secret, payload)
+    this.state.platformPrinters = [
+      saved,
+      ...(this.state.platformPrinters ?? []).filter((printer) => printer.printerId !== saved.printerId),
+    ].sort((left, right) => left.name.localeCompare(right.name))
+    this.state.lastError = null
+    await this.store.save(this.state)
+    await this.refreshCloudState()
+  }
+
+  async removePlatformPrinter(printerId: string) {
+    const client = this.requireClient()
+    const secret = this.requireAgentSecret()
+    const updated = await client.removePlatformPrinter(secret, printerId)
+    this.state.platformPrinters = [
+      updated,
+      ...(this.state.platformPrinters ?? []).filter((printer) => printer.printerId !== updated.printerId),
+    ].sort((left, right) => left.name.localeCompare(right.name))
+    this.state.lastError = null
+    await this.store.save(this.state)
+    await this.refreshCloudState()
   }
 
   async repairPairingCode() {
@@ -74,6 +135,7 @@ export class AgentRuntime {
       pairingCodeExpiresAt: result.pairingCodeExpiresAt,
     }
     await this.store.save(this.state)
+    await this.refreshCloudState()
   }
 
   async syncPrinters() {
@@ -83,6 +145,7 @@ export class AgentRuntime {
       await this.store.save(this.state)
       await this.registerIfNeeded(false)
       await this.reportPrinters()
+      await this.refreshCloudState()
     } catch (error) {
       this.state.lastError = error instanceof Error ? error.message : 'Printer discovery failed'
       await this.store.save(this.state)
@@ -155,12 +218,43 @@ export class AgentRuntime {
     }
     this.state.lastError = null
     await this.store.save(this.state)
+    await this.refreshCloudState()
   }
 
   private async reportPrinters() {
     if (!this.state.serverUrl || !this.state.registration) return
     const client = this.requireClient()
     await client.reportPrinters(this.requireAgentSecret(), this.state.printers)
+  }
+
+  private async refreshCloudState() {
+    if (!this.state.serverUrl || !this.state.registration) return
+    const client = this.requireClient()
+    const secret = this.requireAgentSecret()
+    const [profile, platformPrinters] = await Promise.all([
+      client.profile(secret),
+      client.listPlatformPrinters(secret),
+    ])
+    this.state.registration = {
+      ...this.requireRegistration(),
+      status: profile.registrationStatus,
+    }
+    this.state.profile = {
+      ...profile,
+      reportedPrinters: profile.reportedPrinters.map((printer) => ({
+        localPrinterName: printer.localPrinterName,
+        driverName: printer.driverName ?? null,
+        connectionType: printer.connectionType as LocalPrinter['connectionType'],
+        supportsColor: printer.supportsColor,
+        supportsDuplex: printer.supportsDuplex,
+        supportedPaperSizes: printer.supportedPaperSizes,
+        isDefault: printer.defaultPrinter,
+        status: printer.status as LocalPrinter['status'],
+        shared: printer.shared,
+      })),
+    }
+    this.state.platformPrinters = platformPrinters
+    await this.store.save(this.state)
   }
 
   private async heartbeatTick() {
@@ -186,6 +280,7 @@ export class AgentRuntime {
         status: response.agentStatus,
       }
       await this.store.save(this.state)
+      await this.refreshCloudState()
     } catch (error) {
       this.state.lastError = error instanceof Error ? error.message : 'Heartbeat failed'
       await this.store.save(this.state)
@@ -378,6 +473,30 @@ export class AgentRuntime {
   private pushRecentJob(entry: NonNullable<AgentState['recentJobs']>[number]) {
     this.state.recentJobs = [entry, ...(this.state.recentJobs ?? []).filter((job) => job.jobId !== entry.jobId)].slice(0, 50)
   }
+}
+
+export interface PlatformPrinterUpsertInput {
+  printerId?: string | null
+  name: string
+  agentPrinterName: string
+  enabled: boolean
+  status: PlatformPrinterStatus
+  glossyPaperSurchargeMinor: number
+  baseJobPriceMinor: number
+  monochromePagePriceMinor: number
+  colorPagePriceMinor: number
+  duplexSheetSurchargeMinor: number
+  a3PageSurchargeMinor: number
+  documentConstraints: ConfiguredConstraint[]
+  pricingAdjustments: ConfiguredConstraint[]
+  supportedColorModes: PlatformColorMode[]
+  supportedSidesModes: PlatformSidesMode[]
+  supportedPageSizes: PlatformPageSize[]
+  supportedScalingModes: PlatformScalingMode[]
+  supportsSecureCoverSheets: boolean
+  secureCoverSheetPriceMinor: number
+  secureCoverSheetColorName: string
+  secureCoverSheetLabel: string
 }
 
 function sleep(ms: number) {
