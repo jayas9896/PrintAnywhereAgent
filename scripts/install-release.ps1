@@ -78,4 +78,4 @@ Write-Host "6. After approval, publish or update your customer-facing printers f
 Write-Host ""
 Write-Host "Notes:"
 Write-Host "- The backend URL is configured in the local UI, not in the env file."
-Write-Host "- Business name and GPS location are controlled by the platform admin after manual verification."
+Write-Host "- The admin-approved business location is the fallback; use the Host location panel when this machine can provide GPS or OS location."

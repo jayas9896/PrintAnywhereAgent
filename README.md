@@ -56,8 +56,9 @@ On the shop PC, use the release bundle rather than the full source repo:
 6. Open `http://127.0.0.1:43100`.
 7. Enter the PrintAnywhere backend URL and save the registration.
 8. Give the pairing code to the PrintAnywhere admin.
-9. Wait for the admin to verify the business, set the official location, and approve the machine.
+9. Wait for the admin to verify the business, set the official fallback location, and approve the machine.
 10. After approval, publish customer-facing platform printers from the local Agent UI.
+11. In the Host location panel, capture device location when the host/browser can provide it. Published printers report that location first and fall back to the admin-approved coordinates when capture is unavailable.
 
 The backend URL and display name are configured in the local UI, not in the env file.
 

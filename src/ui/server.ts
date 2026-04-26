@@ -2,6 +2,7 @@ import express from 'express'
 import type { Request, Response } from 'express'
 import type {
   AgentApprovalStatus,
+  AgentLocationSnapshot,
   ConfiguredConstraint,
   PlatformColorMode,
   PlatformPageSize,
@@ -133,6 +134,14 @@ function formatMinor(value: number | null | undefined) {
 function formatTimestamp(value?: string | null, fallback = 'Never') {
   if (!value) return fallback
   return new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
+}
+
+function formatLocationSnapshot(location?: AgentLocationSnapshot | null) {
+  if (!location) {
+    return 'No device location captured'
+  }
+  const accuracy = location.accuracyMeters != null ? ` · ±${Math.round(location.accuracyMeters)}m` : ''
+  return `${location.latitude}, ${location.longitude}${accuracy} · ${humanizeEnum(location.source)} · ${formatTimestamp(location.capturedAt)}`
 }
 
 function redirectWithStatus(response: Response, type: 'notice' | 'error', message: string) {
@@ -499,6 +508,7 @@ export async function startUiServer(runtime: AgentRuntime) {
     const sharedPrinterNames = snapshot.printers.filter((printer) => printer.shared).map((printer) => printer.localPrinterName)
     const profile = snapshot.profile
     const platformPrinters = snapshot.platformPrinters ?? []
+    const hostLocation = snapshot.hostLocation ?? null
 
     response.type('html').send(`<!doctype html>
 <html>
@@ -609,6 +619,22 @@ export async function startUiServer(runtime: AgentRuntime) {
     </div>
 
     <div class="panel">
+      <h2>Host location</h2>
+      <div class="muted">Latest device location</div>
+      <div>${htmlEscape(formatLocationSnapshot(hostLocation))}</div>
+      <div class="muted" style="margin-top:12px;">Published printers use this device location when available. If it cannot be captured, the backend uses the admin-approved business coordinates.</div>
+      <form method="post" action="/location/browser" id="host-location-form" class="actions" style="margin-top:14px;">
+        ${hiddenUiToken(snapshot.uiToken)}
+        <input type="hidden" name="latitude" id="host-location-latitude" />
+        <input type="hidden" name="longitude" id="host-location-longitude" />
+        <input type="hidden" name="accuracyMeters" id="host-location-accuracy" />
+        <input type="hidden" name="capturedAt" id="host-location-captured-at" />
+        <button type="button" id="host-location-button">Use this device location</button>
+        <span class="muted" id="host-location-status"></span>
+      </form>
+    </div>
+
+    <div class="panel">
       <h2>Health</h2>
       <div class="stats">
         <div class="stat">
@@ -631,7 +657,7 @@ export async function startUiServer(runtime: AgentRuntime) {
 
     <div class="panel">
       <h2>Published platform printers</h2>
-      <div class="muted">These are the actual customer-facing printers at this verified location. Business identity and coordinates are locked by admin; only printer-level settings are editable here.</div>
+      <div class="muted">These are the actual customer-facing printers for this machine. The agent reports device location when available, and the backend falls back to the admin-approved business coordinates.</div>
       ${
         profile?.selfServiceEnabled
           ? renderPlatformPrinterForm(snapshot.uiToken, sharedPrinterNames)
@@ -648,7 +674,11 @@ export async function startUiServer(runtime: AgentRuntime) {
                     <details>
                       <summary>${htmlEscape(printer.name)} · ${htmlEscape(printer.agentPrinterName)} · ${htmlEscape(printer.enabled ? 'Enabled' : 'Hidden')}</summary>
                       <div class="muted" style="margin:8px 0 12px;">
-                        Status ${htmlEscape(humanizeEnum(printer.status))} · Base ${htmlEscape(formatMinor(printer.baseJobPriceMinor))} · Mono ${htmlEscape(formatMinor(printer.monochromePagePriceMinor))} · Color ${htmlEscape(formatMinor(printer.colorPagePriceMinor))}
+                        Status ${htmlEscape(humanizeEnum(printer.status))} · Base ${htmlEscape(formatMinor(printer.baseJobPriceMinor))} · Mono ${htmlEscape(formatMinor(printer.monochromePagePriceMinor))} · Color ${htmlEscape(formatMinor(printer.colorPagePriceMinor))} · Location ${htmlEscape(
+                          printer.latitude != null && printer.longitude != null
+                            ? `${printer.latitude}, ${printer.longitude}`
+                            : 'Fallback pending',
+                        )}
                       </div>
                       ${
                         profile?.selfServiceEnabled
@@ -765,6 +795,30 @@ export async function startUiServer(runtime: AgentRuntime) {
         </tbody>
       </table>
     </div>
+    <script>
+      (function () {
+        var button = document.getElementById('host-location-button');
+        var status = document.getElementById('host-location-status');
+        var form = document.getElementById('host-location-form');
+        if (!button || !status || !form) return;
+        button.addEventListener('click', function () {
+          if (!navigator.geolocation) {
+            status.textContent = 'Browser geolocation is not available.';
+            return;
+          }
+          status.textContent = 'Requesting location permission...';
+          navigator.geolocation.getCurrentPosition(function (position) {
+            document.getElementById('host-location-latitude').value = String(position.coords.latitude);
+            document.getElementById('host-location-longitude').value = String(position.coords.longitude);
+            document.getElementById('host-location-accuracy').value = String(position.coords.accuracy || '');
+            document.getElementById('host-location-captured-at').value = new Date(position.timestamp || Date.now()).toISOString();
+            form.submit();
+          }, function (error) {
+            status.textContent = error && error.message ? error.message : 'Location permission was not granted.';
+          }, { enableHighAccuracy: true, timeout: 12000, maximumAge: 300000 });
+        });
+      })();
+    </script>
   </body>
 </html>`)
   })
@@ -806,6 +860,22 @@ export async function startUiServer(runtime: AgentRuntime) {
       redirectWithStatus(response, 'notice', 'Local printers were refreshed from the machine.')
     } catch (error) {
       redirectWithStatus(response, 'error', error instanceof Error ? error.message : 'Could not refresh printers')
+    }
+  })
+
+  app.post('/location/browser', async (request, response) => {
+    if (!verifyUiRequest(runtime, request, response)) return
+    try {
+      const accuracy = String(request.body.accuracyMeters ?? '').trim()
+      await runtime.setBrowserLocation({
+        latitude: Number(request.body.latitude),
+        longitude: Number(request.body.longitude),
+        accuracyMeters: accuracy ? Number(accuracy) : null,
+        capturedAt: String(request.body.capturedAt ?? ''),
+      })
+      redirectWithStatus(response, 'notice', 'Device location captured.')
+    } catch (error) {
+      redirectWithStatus(response, 'error', error instanceof Error ? error.message : 'Could not capture device location')
     }
   })
 

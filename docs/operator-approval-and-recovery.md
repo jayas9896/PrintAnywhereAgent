@@ -11,7 +11,7 @@ The current model is:
 1. you register the machine
 2. you share the pairing code with the platform admin
 3. the admin verifies your business manually
-4. the admin sets the official business name and GPS location
+4. the admin sets the official business name and fallback GPS location
 5. the admin approves the machine
 6. after approval, you publish and manage your own customer-facing printers from the local Agent UI
 
@@ -34,7 +34,7 @@ The following are controlled by the platform admin only:
 
 - business name
 - business address
-- shop latitude and longitude
+- fallback shop latitude and longitude
 - approval status
 
 ## First-time onboarding
@@ -59,7 +59,7 @@ After approval:
 4. Set pricing and customer-facing capabilities.
 5. Save the platform printer.
 
-The platform printer will use the admin-approved business location automatically.
+The platform printer reports the agent host location when the machine or browser can provide it. If no live device location is available, the backend uses the admin-approved business location automatically.
 
 ## Unpublishing a printer
 

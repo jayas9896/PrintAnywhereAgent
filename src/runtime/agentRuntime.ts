@@ -2,6 +2,7 @@ import os from 'node:os'
 import crypto from 'node:crypto'
 import type {
   AgentState,
+  AgentLocationSnapshot,
   ConfiguredConstraint,
   LocalPrinter,
   PlatformColorMode,
@@ -15,6 +16,7 @@ import { AgentStore } from '../config/store.js'
 import { decryptJobPdf, decryptString, encryptString, generateRsaIdentity, unwrapJobKey } from '../core/crypto.js'
 import { deriveMachineKey, getMachineId, isWindows } from '../core/machine.js'
 import { CloudApiClient } from '../cloud/api.js'
+import { detectHostLocation, normalizeLocationSnapshot } from '../platform/location.js'
 import { discoverPrinters, printPdf } from '../platform/printers.js'
 
 export class AgentRuntime {
@@ -33,6 +35,7 @@ export class AgentRuntime {
     await this.ensureIdentity()
     await this.ensureUiToken()
     await this.cleanupTempFiles()
+    await this.refreshHostLocation()
     this.resetStatsIfNeeded()
     this.running = true
     await this.syncPrinters()
@@ -75,14 +78,48 @@ export class AgentRuntime {
     await this.refreshCloudState()
   }
 
+  async refreshHostLocation() {
+    try {
+      const location = await detectHostLocation()
+      if (!location) {
+        return this.state.hostLocation ?? null
+      }
+      this.state.hostLocation = location
+      this.state.lastError = null
+      await this.store.save(this.state)
+      return location
+    } catch (error) {
+      this.state.lastError = error instanceof Error ? error.message : 'Host location detection failed'
+      await this.store.save(this.state)
+      return this.state.hostLocation ?? null
+    }
+  }
+
+  async setBrowserLocation(input: {
+    latitude: number
+    longitude: number
+    accuracyMeters?: number | null
+    capturedAt?: string | null
+  }) {
+    this.state.hostLocation = normalizeLocationSnapshot({
+      ...input,
+      source: 'browser',
+    })
+    this.state.lastError = null
+    await this.store.save(this.state)
+    return this.state.hostLocation
+  }
+
   async upsertPlatformPrinter(input: PlatformPrinterUpsertInput) {
     const client = this.requireClient()
     const secret = this.requireAgentSecret()
+    const hostLocation = await this.refreshHostLocation()
     const payload = {
       name: input.name.trim(),
       agentPrinterName: input.agentPrinterName.trim(),
       enabled: input.enabled,
       status: input.status,
+      ...platformLocationPayload(hostLocation),
       glossyPaperSurchargeMinor: input.glossyPaperSurchargeMinor,
       baseJobPriceMinor: input.baseJobPriceMinor,
       monochromePagePriceMinor: input.monochromePagePriceMinor,
@@ -520,5 +557,19 @@ function defaultStats() {
     activeJobCount: 0,
     completedJobsToday: 0,
     failedJobsToday: 0,
+  }
+}
+
+function platformLocationPayload(location: AgentLocationSnapshot | null) {
+  if (!location) {
+    return {}
+  }
+
+  return {
+    reportedLatitude: location.latitude,
+    reportedLongitude: location.longitude,
+    reportedLocationAccuracyMeters: location.accuracyMeters ?? null,
+    reportedLocationSource: location.source,
+    reportedLocationCapturedAt: location.capturedAt,
   }
 }

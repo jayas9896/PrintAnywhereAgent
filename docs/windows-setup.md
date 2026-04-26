@@ -104,9 +104,10 @@ The backend URL and display name are configured later in the local UI after the 
 5. Click `Save and register`.
 6. Copy the pairing code shown in the UI.
 7. Share the pairing code with the PrintAnywhere admin.
-8. Wait for the admin to verify the business manually, set the official business name and location, and approve the machine.
+8. Wait for the admin to verify the business manually, set the official business name and fallback location, and approve the machine.
 9. Once the local UI shows the machine is approved, mark the Windows printers you want as shared.
 10. In the `Published platform printers` section, publish one or more customer-facing platform printers backed by those shared Windows printers.
+11. Use the local UI Host location panel when Windows or the browser can provide device location. The backend uses that location first and falls back to the admin-approved coordinates when unavailable.
 
 Admin-side direct pairing in the main admin portal still exists as a break-glass or migration path, but it is not the normal owner onboarding flow anymore.
 

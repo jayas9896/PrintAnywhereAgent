@@ -15,6 +15,7 @@ export type PlatformColorMode = 'MONOCHROME' | 'COLOR'
 export type PlatformSidesMode = 'SINGLE_SIDED' | 'DOUBLE_SIDED'
 export type PlatformPageSize = 'A4' | 'A3'
 export type PlatformScalingMode = 'ACTUAL_SIZE' | 'FIT_TO_PAGE' | 'SHRINK_TO_FIT'
+export type AgentLocationSource = 'browser' | 'windows-location-service' | 'configured'
 
 export interface ConfiguredConstraint {
   id?: string | null
@@ -85,6 +86,14 @@ export interface AgentStats {
   failedJobsToday: number
 }
 
+export interface AgentLocationSnapshot {
+  latitude: number
+  longitude: number
+  accuracyMeters?: number | null
+  source: AgentLocationSource
+  capturedAt: string
+}
+
 export interface AgentProfile {
   agentId: string
   machineId: string
@@ -152,6 +161,7 @@ export interface AgentState {
   stats?: AgentStats | null
   profile?: AgentProfile | null
   platformPrinters?: PlatformPrinter[]
+  hostLocation?: AgentLocationSnapshot | null
 }
 
 export interface PollJob {

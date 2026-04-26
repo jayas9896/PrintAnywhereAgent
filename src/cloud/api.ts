@@ -109,7 +109,13 @@ const platformPrinterSchema = z.object({
 export type PlatformPrinterUpsertPayload = Omit<
   PlatformPrinter,
   'printerId' | 'routingMode' | 'latitude' | 'longitude' | 'createdAt' | 'updatedAt'
->
+> & {
+  reportedLatitude?: number | null
+  reportedLongitude?: number | null
+  reportedLocationAccuracyMeters?: number | null
+  reportedLocationSource?: string | null
+  reportedLocationCapturedAt?: string | null
+}
 
 export class CloudApiClient {
   constructor(private readonly serverUrl: string) {}
@@ -297,6 +303,11 @@ export class CloudApiClient {
       agentPrinterName: payload.agentPrinterName,
       enabled: payload.enabled,
       status: payload.status,
+      reportedLatitude: payload.reportedLatitude ?? null,
+      reportedLongitude: payload.reportedLongitude ?? null,
+      reportedLocationAccuracyMeters: payload.reportedLocationAccuracyMeters ?? null,
+      reportedLocationSource: payload.reportedLocationSource ?? null,
+      reportedLocationCapturedAt: payload.reportedLocationCapturedAt ?? null,
       glossyPaperSurchargeMinor: payload.glossyPaperSurchargeMinor,
       baseJobPriceMinor: payload.baseJobPriceMinor,
       monochromePagePriceMinor: payload.monochromePagePriceMinor,
