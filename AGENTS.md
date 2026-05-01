@@ -1,5 +1,16 @@
 # AGENTS.md — PrintAnywhere Agent
 
+## Central Agentic Rules
+
+Read first:
+
+- `/home/jayas/dhruvanta-platform-governance/agentic/steering/README.md`
+- `/home/jayas/dhruvanta-platform-governance/agentic/skills/README.md`
+- `/home/jayas/dhruvanta-platform-governance/agentic/repos/printanywhere-agent.md`
+- `/home/jayas/dhruvanta-platform-governance/docs/standards/dhruvanta-production-readiness.md`
+
+This local `AGENTS.md` may only add repo-local details or stricter rules.
+
 ## Project Overview
 
 Windows-first printer bridge for PrintAnywhere. Handed to print-shop owners as a prebuilt local agent that exposes their Windows printers to the PrintAnywhere cloud backend. Polls for encrypted print jobs, decrypts locally, prints, and reports status.
