@@ -75,3 +75,21 @@ npm run release:build    # Build distributable release bundle
 - [docs/windows-setup.md](docs/windows-setup.md) — Operator setup and pairing
 - [docs/operator-approval-and-recovery.md](docs/operator-approval-and-recovery.md) — Approval flows, soft disable, recovery
 - [docs/release-build.md](docs/release-build.md) — Release bundle build process
+
+## Platform Standards Reference
+
+Before changing code, deployment, monitoring, audit logging, or security behavior, apply the shared Dhruvanta standards in `/home/jayas/dhruvanta-platform-governance/docs/standards/README.md`.
+
+Use the specific standards for the work type:
+- Frontend: `/home/jayas/dhruvanta-platform-governance/docs/standards/frontend-react.md`
+- Java/Spring backend: `/home/jayas/dhruvanta-platform-governance/docs/standards/backend-java-spring.md`
+- Node/TypeScript backend: `/home/jayas/dhruvanta-platform-governance/docs/standards/backend-node-typescript.md`
+- Ruby/Rails backend: `/home/jayas/dhruvanta-platform-governance/docs/standards/backend-ruby-rails.md`
+- Deployment, scaling, and zero downtime: `/home/jayas/dhruvanta-platform-governance/docs/standards/deployment-zero-downtime.md`
+- Monitoring and alerting: `/home/jayas/dhruvanta-platform-governance/docs/standards/monitoring-alerting.md`
+- Audit logging: `/home/jayas/dhruvanta-platform-governance/docs/standards/audit-logging.md`
+- Security and configuration: `/home/jayas/dhruvanta-platform-governance/docs/standards/security.md` and `/home/jayas/dhruvanta-platform-governance/docs/standards/configuration.md`
+
+Frontend Vercel linking and recommended subdomains are documented in `/home/jayas/dhruvanta-platform-governance/docs/deployment/vercel-frontend-linking.md`.
+
+Repo-local rules in this file remain authoritative when they are stricter than the shared standards.
