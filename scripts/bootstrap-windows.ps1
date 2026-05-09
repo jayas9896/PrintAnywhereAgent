@@ -2,6 +2,7 @@ param(
     [string]$DataDir = "",
     [int]$Port = 43100,
     [switch]$RegisterStartupTask,
+    [switch]$CreateShortcuts,
     [string]$TaskName = "PrintAnywhereAgent"
 )
 
@@ -40,21 +41,25 @@ Write-Host "Building agent..."
 npm run build
 
 if ($RegisterStartupTask) {
-    $runScript = Join-Path $repoRoot "scripts\\run-agent.ps1"
+    $runScript = Join-Path $repoRoot "scripts\\start-agent-background.ps1"
     $action = New-ScheduledTaskAction `
         -Execute "powershell.exe" `
-        -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$runScript`" -DataDir `"$DataDir`" -Port $Port"
+        -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$runScript`" -DataDir `"$DataDir`" -Port $Port"
     $trigger = New-ScheduledTaskTrigger -AtLogOn
-    $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
+    $principal = New-ScheduledTaskPrincipal -UserId ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Limited
     Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
     Write-Host "Registered startup task '$TaskName'."
+}
+
+if ($CreateShortcuts) {
+    powershell -ExecutionPolicy Bypass -File .\scripts\install-release.ps1 -DataDir "$DataDir" -Port $Port -CreateShortcuts
 }
 
 Write-Host ""
 Write-Host "Bootstrap completed."
 Write-Host "Next steps:"
-Write-Host "1. Run: powershell -ExecutionPolicy Bypass -File .\\scripts\\run-agent.ps1 -DataDir `"$DataDir`" -Port $Port"
-Write-Host "2. Open: http://127.0.0.1:$Port"
+Write-Host "1. Run: powershell -ExecutionPolicy Bypass -WindowStyle Hidden -File .\\scripts\\start-agent-background.ps1 -DataDir `"$DataDir`" -Port $Port -OpenUi"
+Write-Host "2. Open or refresh: http://127.0.0.1:$Port"
 Write-Host "3. The production backend URL is prefilled as https://api.dhruvantasystems.net/printanywhere."
 Write-Host "4. Click Save and register, then share the pairing code with the PrintAnywhere admin so they can verify and approve this machine."
 Write-Host "5. After approval, publish or update your customer-facing printers from the local Agent UI."

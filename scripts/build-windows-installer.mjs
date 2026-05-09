@@ -22,6 +22,7 @@ const installerPath = path.join(artifactsDir, `${artifactName}-setup.exe`)
 const tempDir = path.join(repoRoot, 'tmp', 'windows-installer')
 const resourcePath = path.join(tempDir, 'printanywhere-agent-installer.rc')
 const resourceObjectPath = path.join(tempDir, 'printanywhere-agent-installer.res.o')
+const iconPath = path.join(repoRoot, 'assets', 'dhruvanta-agent.ico')
 const installerSource = path.join(
   repoRoot,
   'packaging',
@@ -68,12 +69,14 @@ function rcString(value) {
 
 await requireFile(zipPath, 'Release zip is missing; run npm run release:build first')
 await requireFile(installerSource, 'Installer source is missing')
+await requireFile(iconPath, 'Dhruvanta installer icon is missing')
 await fs.mkdir(tempDir, { recursive: true })
 
 await fs.writeFile(
   resourcePath,
   [
     '#include <windows.h>',
+    `1 ICON "${rcString(iconPath)}"`,
     `101 RCDATA "${rcString(zipPath)}"`,
     '1 VERSIONINFO',
     `FILEVERSION ${rcVersion}`,

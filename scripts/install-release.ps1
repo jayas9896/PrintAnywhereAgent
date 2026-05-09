@@ -2,6 +2,8 @@ param(
     [string]$DataDir = "",
     [int]$Port = 0,
     [switch]$RegisterStartupTask,
+    [switch]$CreateShortcuts,
+    [switch]$StartTray,
     [string]$TaskName = "PrintAnywhereAgent"
 )
 
@@ -38,6 +40,73 @@ function Resolve-NodeCommand {
     throw "Node.js was not found. Use the Windows installer/release bundle with bundled runtime, or install Node.js 20+ first."
 }
 
+function Resolve-DefaultDataDir {
+    param([string]$RepoRoot)
+
+    $expectedRoot = Join-Path $env:LOCALAPPDATA "Dhruvanta Systems\PrintAnywhereAgent"
+    if ($RepoRoot.StartsWith($expectedRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return Join-Path $expectedRoot "data"
+    }
+
+    return Join-Path $RepoRoot "data"
+}
+
+function Initialize-StableDataDir {
+    param([string]$DataDir, [string]$RepoRoot)
+
+    $statePath = Join-Path $DataDir "agent-state.json"
+    if (Test-Path $statePath) {
+        return
+    }
+
+    $installRoot = Split-Path -Parent $RepoRoot
+    $candidate = Get-ChildItem -Path $installRoot -Directory -Filter "printanywhere-agent-v*" -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            $candidateState = Join-Path $_.FullName "data\agent-state.json"
+            if (Test-Path $candidateState) {
+                Get-Item $candidateState
+            }
+        } |
+        Sort-Object LastWriteTimeUtc -Descending |
+        Select-Object -First 1
+
+    if (-not $candidate) {
+        return
+    }
+
+    New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
+    $state = Get-Content $candidate.FullName -Raw | ConvertFrom-Json
+    if (
+        $state.lastError -and
+        ([string]$state.lastError).Contains("discover-printers.ps1") -and
+        ([string]$state.lastError).Contains("does not exist")
+    ) {
+        $state.lastError = $null
+    }
+    $state | ConvertTo-Json -Depth 50 | Set-Content -Encoding UTF8 $statePath
+    Write-Host "Migrated existing agent state to stable data directory: $DataDir"
+}
+
+function New-AgentShortcut {
+    param(
+        [string]$ShortcutPath,
+        [string]$Arguments,
+        [string]$Description
+    )
+
+    $shell = New-Object -ComObject WScript.Shell
+    $shortcut = $shell.CreateShortcut($ShortcutPath)
+    $shortcut.TargetPath = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+    $shortcut.Arguments = $Arguments
+    $shortcut.WorkingDirectory = $repoRoot
+    $shortcut.Description = $Description
+    $iconPath = Join-Path $repoRoot "assets\dhruvanta-agent.ico"
+    if (Test-Path $iconPath) {
+        $shortcut.IconLocation = "$iconPath,0"
+    }
+    $shortcut.Save()
+}
+
 $nodeCommand = Resolve-NodeCommand
 
 if (-not (Test-Path "$repoRoot/dist/index.js")) {
@@ -49,7 +118,7 @@ if (-not (Test-Path "$repoRoot/node_modules")) {
 }
 
 if ([string]::IsNullOrWhiteSpace($DataDir)) {
-    $DataDir = Join-Path $repoRoot "data"
+    $DataDir = Resolve-DefaultDataDir -RepoRoot $repoRoot
 }
 
 if ($Port -le 0) {
@@ -62,6 +131,7 @@ $envFilePath = Join-Path $configDir "agent.env"
 
 New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
 New-Item -ItemType Directory -Force -Path $configDir | Out-Null
+Initialize-StableDataDir -DataDir $DataDir -RepoRoot $repoRoot
 
 if ((Test-Path $envExamplePath) -and (-not (Test-Path $envFilePath))) {
     Copy-Item $envExamplePath $envFilePath
@@ -69,14 +139,89 @@ if ((Test-Path $envExamplePath) -and (-not (Test-Path $envFilePath))) {
 }
 
 if ($RegisterStartupTask) {
-    $runScript = Join-Path $repoRoot "scripts\\run-agent.ps1"
+    $runScript = Join-Path $repoRoot "scripts\\start-agent-background.ps1"
     $action = New-ScheduledTaskAction `
         -Execute "powershell.exe" `
-        -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$runScript`" -EnvFile `"$envFilePath`" -DataDir `"$DataDir`" -Port $Port"
+        -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$runScript`" -EnvFile `"$envFilePath`" -DataDir `"$DataDir`" -Port $Port"
     $trigger = New-ScheduledTaskTrigger -AtLogOn
-    $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
-    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
-    Write-Host "Registered startup task '$TaskName'."
+    $principal = New-ScheduledTaskPrincipal -UserId ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Limited
+    $trayScript = Join-Path $repoRoot "scripts\\agent-tray.ps1"
+    $trayAction = New-ScheduledTaskAction `
+        -Execute "powershell.exe" `
+        -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$trayScript`" -EnvFile `"$envFilePath`" -DataDir `"$DataDir`" -Port $Port"
+
+    try {
+        Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
+        Write-Host "Registered startup task '$TaskName'."
+        Register-ScheduledTask -TaskName "$TaskName Tray" -Action $trayAction -Trigger $trigger -Principal $principal -Force | Out-Null
+        Write-Host "Registered startup task '$TaskName Tray'."
+    } catch {
+        Write-Warning "Scheduled Task registration failed. Falling back to per-user Startup folder shortcuts."
+        $startup = [Environment]::GetFolderPath("Startup")
+        New-AgentShortcut `
+            -ShortcutPath (Join-Path $startup "PrintAnywhere Agent Background.lnk") `
+            -Arguments "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$runScript`" -EnvFile `"$envFilePath`" -DataDir `"$DataDir`" -Port $Port" `
+            -Description "Start the Dhruvanta PrintAnywhere Agent in the background at sign-in."
+        New-AgentShortcut `
+            -ShortcutPath (Join-Path $startup "PrintAnywhere Agent Tray.lnk") `
+            -Arguments "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$trayScript`" -EnvFile `"$envFilePath`" -DataDir `"$DataDir`" -Port $Port" `
+            -Description "Show the Dhruvanta PrintAnywhere Agent tray controls at sign-in."
+        Write-Host "Created Startup folder shortcuts."
+    }
+}
+
+if ($CreateShortcuts) {
+    $desktop = [Environment]::GetFolderPath("DesktopDirectory")
+    $programs = [Environment]::GetFolderPath("Programs")
+    $startMenuDir = Join-Path $programs "Dhruvanta Systems"
+    New-Item -ItemType Directory -Force -Path $startMenuDir | Out-Null
+
+    $startScript = Join-Path $repoRoot "scripts\start-agent-background.ps1"
+    $trayScript = Join-Path $repoRoot "scripts\agent-tray.ps1"
+    $stopScript = Join-Path $repoRoot "scripts\stop-agent.ps1"
+    $updateScript = Join-Path $repoRoot "scripts\check-update.ps1"
+
+    $commonStartArgs = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$startScript`" -EnvFile `"$envFilePath`" -DataDir `"$DataDir`" -Port $Port -OpenUi"
+    $commonTrayArgs = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$trayScript`" -EnvFile `"$envFilePath`" -DataDir `"$DataDir`" -Port $Port"
+
+    New-AgentShortcut `
+        -ShortcutPath (Join-Path $desktop "PrintAnywhere Agent.lnk") `
+        -Arguments $commonStartArgs `
+        -Description "Start the Dhruvanta PrintAnywhere Agent and open the local UI."
+    New-AgentShortcut `
+        -ShortcutPath (Join-Path $desktop "PrintAnywhere Agent Tray.lnk") `
+        -Arguments $commonTrayArgs `
+        -Description "Show the Dhruvanta PrintAnywhere Agent tray controls."
+    New-AgentShortcut `
+        -ShortcutPath (Join-Path $startMenuDir "PrintAnywhere Agent.lnk") `
+        -Arguments $commonStartArgs `
+        -Description "Start the Dhruvanta PrintAnywhere Agent and open the local UI."
+    New-AgentShortcut `
+        -ShortcutPath (Join-Path $startMenuDir "PrintAnywhere Agent Tray.lnk") `
+        -Arguments $commonTrayArgs `
+        -Description "Show the Dhruvanta PrintAnywhere Agent tray controls."
+    New-AgentShortcut `
+        -ShortcutPath (Join-Path $startMenuDir "Stop PrintAnywhere Agent.lnk") `
+        -Arguments "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$stopScript`" -Port $Port" `
+        -Description "Stop the local Dhruvanta PrintAnywhere Agent."
+    New-AgentShortcut `
+        -ShortcutPath (Join-Path $startMenuDir "Check for PrintAnywhere Agent Updates.lnk") `
+        -Arguments "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$updateScript`"" `
+        -Description "Check for Dhruvanta PrintAnywhere Agent updates."
+    New-AgentShortcut `
+        -ShortcutPath (Join-Path $startMenuDir "Install Latest PrintAnywhere Agent Update.lnk") `
+        -Arguments "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$updateScript`" -Install" `
+        -Description "Download and install the latest Dhruvanta PrintAnywhere Agent release."
+    Write-Host "Created Desktop and Start Menu shortcuts."
+}
+
+if ($StartTray) {
+    $trayScript = Join-Path $repoRoot "scripts\agent-tray.ps1"
+    Start-Process `
+        -FilePath "powershell.exe" `
+        -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", "`"$trayScript`"", "-EnvFile", "`"$envFilePath`"", "-DataDir", "`"$DataDir`"", "-Port", $Port) `
+        -WorkingDirectory $repoRoot `
+        -WindowStyle Hidden
 }
 
 Write-Host ""
@@ -84,9 +229,9 @@ Write-Host "Release bundle install completed."
 Write-Host "Node runtime: $nodeCommand"
 Write-Host "Next steps:"
 Write-Host "1. Review config\\agent.env if you want to change the port, data folder, or simulation mode."
-Write-Host "2. Start the agent with start-agent.cmd or:"
-Write-Host "   powershell -ExecutionPolicy Bypass -File .\\scripts\\run-agent.ps1 -EnvFile `"$envFilePath`" -DataDir `"$DataDir`" -Port $Port"
-Write-Host "3. Open http://127.0.0.1:$Port"
+Write-Host "2. Start the agent with start-agent.cmd, the Desktop shortcut, or:"
+Write-Host "   powershell -ExecutionPolicy Bypass -WindowStyle Hidden -File .\\scripts\\start-agent-background.ps1 -EnvFile `"$envFilePath`" -DataDir `"$DataDir`" -Port $Port -OpenUi"
+Write-Host "3. Use the tray icon or http://127.0.0.1:$Port for refresh, health, and printer publishing."
 Write-Host "4. The production backend URL is prefilled as https://api.dhruvantasystems.net/printanywhere."
 Write-Host "5. Click Save and register, then share the pairing code with the PrintAnywhere admin so they can verify and approve this machine."
 Write-Host "6. After approval, publish or update your customer-facing printers from the local Agent UI."

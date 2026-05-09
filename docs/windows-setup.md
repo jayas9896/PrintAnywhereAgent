@@ -25,7 +25,7 @@ The `.exe` installer and current release bundle include a Windows Node runtime. 
 
 ## Preferred Install: Release Bundle
 
-If someone handed you `printanywhere-agent-v<version>-setup.exe`, run that installer first. It extracts the release bundle into your per-user local app data folder, runs the bundle installer, and can start the local agent when it finishes.
+If someone handed you `printanywhere-agent-v<version>-setup.exe`, run that installer first. It extracts the release bundle into your per-user local app data folder, runs the bundle installer, creates Dhruvanta-branded shortcuts, registers hidden startup at Windows sign-in, starts the tray controller, and can open the local agent UI when it finishes.
 
 If someone handed you a prebuilt `PrintAnywhereAgent` zip release bundle instead, use that folder instead of the source repo.
 
@@ -38,7 +38,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install-release.ps1
 If you want the agent to start automatically when the Windows user signs in:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\install-release.ps1 -RegisterStartupTask
+powershell -ExecutionPolicy Bypass -File .\scripts\install-release.ps1 -RegisterStartupTask -CreateShortcuts -StartTray
 ```
 
 That installer:
@@ -48,14 +48,16 @@ That installer:
 - creates the local data directory
 - copies `config\agent.env` from the example file if needed
 - optionally registers a Windows Scheduled Task
+- optionally creates Desktop and Start Menu shortcuts
+- optionally starts the tray controller
 
 Then start the agent:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\run-agent.ps1
+powershell -ExecutionPolicy Bypass -WindowStyle Hidden -File .\scripts\start-agent-background.ps1 -OpenUi
 ```
 
-The release bundle also includes `install-agent.cmd` and `start-agent.cmd` wrappers for the same actions.
+The release bundle also includes `install-agent.cmd`, `start-agent.cmd`, `agent-tray.cmd`, `update-agent.cmd`, and `run-agent-console.cmd` wrappers. Use `run-agent-console.cmd` only for diagnostics when support asks for visible logs.
 
 ## Alternative: Run From Source Repo
 
@@ -103,6 +105,12 @@ Production backend URL:
 
 - `https://api.dhruvantasystems.net/printanywhere`
 
+Release installs keep runtime state in a stable folder across updates:
+
+- `%LOCALAPPDATA%\Dhruvanta Systems\PrintAnywhereAgent\data`
+
+The program folder is versioned, but pairing state, backend URL, printer sharing choices, and local health history stay in that stable data folder.
+
 ## Registration, approval, and first publish
 
 1. Start the agent.
@@ -140,7 +148,20 @@ Print packets are downloaded encrypted. The current implementation writes the de
 ### The UI opens but no printers are listed
 
 - Confirm the Windows printer is installed and visible in normal Windows print dialogs.
-- Run the agent in a console and inspect any PowerShell printer discovery errors.
+- Use the tray menu or local UI to refresh printers.
+- Run `run-agent-console.cmd` only when support needs visible logs.
+
+### A terminal window is visible
+
+- Close the visible terminal window.
+- Start the agent again from the Desktop shortcut, Start Menu shortcut, or tray menu. Those use the hidden background launcher.
+- New installs and updates register hidden startup at Windows sign-in.
+
+### How do I update the agent?
+
+- Use the tray icon and choose `Check for Updates` or `Install Latest Update`.
+- Or use the Start Menu shortcuts under `Dhruvanta Systems`.
+- The updater downloads the latest GitHub release setup executable and runs it with the quiet update path.
 
 ### Pairing code is rejected
 

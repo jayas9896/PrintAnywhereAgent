@@ -13,6 +13,8 @@ const artifactsDir = path.join(repoRoot, 'artifacts')
 const bundleDir = path.join(artifactsDir, artifactName)
 const requiredPaths = [
   'README.md',
+  'assets/dhruvanta-agent.ico',
+  'agent-tray.cmd',
   'config/agent.env.example',
   'dist/index.js',
   'docs/windows-setup.md',
@@ -21,11 +23,18 @@ const requiredPaths = [
   'node_modules',
   'package.json',
   'release-manifest.json',
+  'run-agent-console.cmd',
   'runtime/node-win-x64/node.exe',
+  'scripts/agent-tray.ps1',
+  'scripts/check-update.ps1',
   'scripts/discover-printers.ps1',
   'scripts/install-release.ps1',
+  'scripts/restart-agent.ps1',
   'scripts/run-agent.ps1',
+  'scripts/start-agent-background.ps1',
+  'scripts/stop-agent.ps1',
   'start-agent.cmd',
+  'update-agent.cmd',
 ]
 
 const missing = []

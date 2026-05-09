@@ -46,6 +46,7 @@ Each bundle contains only the operator-facing runtime assets:
 - prebuilt `dist/`
 - production-only `node_modules/`
 - bundled Windows Node runtime under `runtime/node-win-x64/`
+- Dhruvanta-branded icon assets for setup, shortcuts, and tray
 - `config/agent.env.example`
 - Windows install/start helpers
 - operator docs
@@ -55,16 +56,16 @@ Each bundle contains only the operator-facing runtime assets:
 On the shop PC, use the release bundle rather than the full source repo:
 
 1. Prefer `printanywhere-agent-v<version>-setup.exe`.
-2. Run the setup executable and choose whether to start the agent when it finishes.
+2. Run the setup executable. It installs into your Windows user profile, creates Desktop and Start Menu shortcuts, registers hidden startup at sign-in, and can start the tray icon immediately.
 3. If you use the zip instead, extract `printanywhere-agent-v<version>.zip` and run `install-agent.cmd` once.
 4. If you want the agent to start automatically at sign-in, run:
 
    ```powershell
-   powershell -ExecutionPolicy Bypass -File .\scripts\install-release.ps1 -RegisterStartupTask
+   powershell -ExecutionPolicy Bypass -File .\scripts\install-release.ps1 -RegisterStartupTask -CreateShortcuts -StartTray
    ```
 
 5. Review `config\agent.env` if you want to change the local UI port, data directory, or simulation mode.
-6. Start the agent with `start-agent.cmd`.
+6. Start the agent with the Desktop shortcut, Start Menu shortcut, tray menu, or `start-agent.cmd`. These start the runtime hidden instead of keeping a terminal window on top.
 7. Open `http://127.0.0.1:43100`.
 8. The production backend URL is prefilled as `https://api.dhruvantasystems.net/printanywhere`; change it only for local testing or support-directed override.
 9. Click `Save and register`.
@@ -142,6 +143,18 @@ Supported runtime variables:
   - force simulated print completion
   - default: `false` on Windows, `true` on non-Windows
 
+## Background, Tray, And Updates
+
+Release installs use a stable data directory:
+
+- `%LOCALAPPDATA%\Dhruvanta Systems\PrintAnywhereAgent\data`
+
+The versioned program folder can change during updates, but pairing state, backend URL, printer sharing choices, and local health data stay in that stable data folder.
+
+The installer creates Dhruvanta-branded shortcuts for opening the local UI, starting the tray controller, stopping the background agent, checking for updates, and installing the latest update.
+
+The tray menu can open the UI, refresh printer discovery, restart/stop the agent, check for updates, and install the latest GitHub release setup executable.
+
 ## Security Model
 
 The agent stores:
@@ -178,6 +191,8 @@ This repo targets the backend Print Agent API exposed by the main `PrintAnywhere
 - `src/cloud/api.ts` backend API client
 - `src/platform/printers.ts` local printer discovery and print execution
 - `src/ui/server.ts` local operator UI
+- `scripts/agent-tray.ps1` Windows tray controller
+- `scripts/check-update.ps1` GitHub release updater
 - `scripts/build-release.mjs` release artifact assembler
 - `scripts/build-windows-installer.mjs` Windows setup executable builder
 - `scripts/install-release.ps1` Windows install helper for prebuilt bundles

@@ -119,18 +119,36 @@ await fs.mkdir(bundleDir, { recursive: true })
 await copy(path.join(repoRoot, 'dist'), path.join(bundleDir, 'dist'))
 await copy(path.join(repoRoot, 'docs'), path.join(bundleDir, 'docs'))
 await copy(path.join(repoRoot, 'config'), path.join(bundleDir, 'config'))
+await copy(path.join(repoRoot, 'assets'), path.join(bundleDir, 'assets'))
 await writeText(path.join(bundleDir, 'README.md'), await fs.readFile(path.join(repoRoot, 'README.md'), 'utf8'))
 await writeText(path.join(bundleDir, 'package.json'), await fs.readFile(path.join(repoRoot, 'package.json'), 'utf8'))
 await writeText(path.join(bundleDir, 'package-lock.json'), await fs.readFile(path.join(repoRoot, 'package-lock.json'), 'utf8'))
 await writeText(
   path.join(bundleDir, 'start-agent.cmd'),
+  '@echo off\r\npowershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0scripts\\start-agent-background.ps1" -OpenUi %*\r\n',
+)
+await writeText(
+  path.join(bundleDir, 'run-agent-console.cmd'),
   '@echo off\r\npowershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\\run-agent.ps1" %*\r\n',
+)
+await writeText(
+  path.join(bundleDir, 'agent-tray.cmd'),
+  '@echo off\r\npowershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0scripts\\agent-tray.ps1" %*\r\n',
+)
+await writeText(
+  path.join(bundleDir, 'update-agent.cmd'),
+  '@echo off\r\npowershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0scripts\\check-update.ps1" -Install %*\r\n',
 )
 await writeText(
   path.join(bundleDir, 'install-agent.cmd'),
   '@echo off\r\npowershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\\install-release.ps1" %*\r\n',
 )
 await copy(path.join(repoRoot, 'scripts', 'run-agent.ps1'), path.join(bundleDir, 'scripts', 'run-agent.ps1'))
+await copy(path.join(repoRoot, 'scripts', 'start-agent-background.ps1'), path.join(bundleDir, 'scripts', 'start-agent-background.ps1'))
+await copy(path.join(repoRoot, 'scripts', 'stop-agent.ps1'), path.join(bundleDir, 'scripts', 'stop-agent.ps1'))
+await copy(path.join(repoRoot, 'scripts', 'restart-agent.ps1'), path.join(bundleDir, 'scripts', 'restart-agent.ps1'))
+await copy(path.join(repoRoot, 'scripts', 'agent-tray.ps1'), path.join(bundleDir, 'scripts', 'agent-tray.ps1'))
+await copy(path.join(repoRoot, 'scripts', 'check-update.ps1'), path.join(bundleDir, 'scripts', 'check-update.ps1'))
 await copy(path.join(repoRoot, 'scripts', 'install-release.ps1'), path.join(bundleDir, 'scripts', 'install-release.ps1'))
 await copy(path.join(repoRoot, 'scripts', 'discover-printers.ps1'), path.join(bundleDir, 'scripts', 'discover-printers.ps1'))
 await includeWindowsNodeRuntime()
@@ -148,17 +166,26 @@ await writeText(
       nodeVersion: process.version,
       contents: [
         'README.md',
+        'assets/dhruvanta-agent.ico',
         'config/agent.env.example',
         'dist/',
         'docs/',
+        'agent-tray.cmd',
         'install-agent.cmd',
         'node_modules/',
         'package.json',
+        'run-agent-console.cmd',
         'runtime/node-win-x64/node.exe',
+        'scripts/agent-tray.ps1',
+        'scripts/check-update.ps1',
         'scripts/install-release.ps1',
         'scripts/discover-printers.ps1',
+        'scripts/restart-agent.ps1',
         'scripts/run-agent.ps1',
+        'scripts/start-agent-background.ps1',
+        'scripts/stop-agent.ps1',
         'start-agent.cmd',
+        'update-agent.cmd',
       ],
     },
     null,

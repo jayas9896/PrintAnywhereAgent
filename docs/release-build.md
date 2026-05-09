@@ -23,6 +23,9 @@ artifacts/
 ├── printanywhere-agent-v<version>-setup.exe
 ├── printanywhere-agent-v<version>/
 │   ├── README.md
+│   ├── agent-tray.cmd
+│   ├── assets/
+│   │   └── dhruvanta-agent.ico
 │   ├── config/
 │   │   └── agent.env.example
 │   ├── dist/
@@ -35,9 +38,15 @@ artifacts/
 │   ├── runtime/
 │   │   └── node-win-x64/
 │   ├── scripts/
+│   │   ├── agent-tray.ps1
+│   │   ├── check-update.ps1
 │   │   ├── install-release.ps1
-│   │   └── run-agent.ps1
+│   │   ├── restart-agent.ps1
+│   │   ├── run-agent.ps1
+│   │   ├── start-agent-background.ps1
+│   │   └── stop-agent.ps1
 │   └── start-agent.cmd
+│   └── update-agent.cmd
 └── printanywhere-agent-v<version>.tar.gz
 └── printanywhere-agent-v<version>.zip
 ```
@@ -49,6 +58,7 @@ The bundle intentionally excludes the development-only parts of the repo and kee
 - prebuilt runtime files from `dist/`
 - production dependencies from `npm ci --omit=dev`
 - bundled Windows Node runtime from the official Node.js distribution
+- Dhruvanta icon assets for setup, shortcuts, and tray
 - operator docs
 - sample env file
 - install/start helpers
@@ -62,7 +72,9 @@ When sharing the agent with a print-shop owner:
 2. Use the generated `.zip` only when the operator wants to inspect the bundle before install.
 3. Point them to `README.md` and `docs/windows-setup.md`.
 4. If they use the zip, ask them to run `install-agent.cmd` once, then `start-agent.cmd`.
-5. If they need auto-start at sign-in, use `scripts/install-release.ps1 -RegisterStartupTask`.
+5. If they need auto-start at sign-in from a zip bundle, use `scripts/install-release.ps1 -RegisterStartupTask -CreateShortcuts -StartTray`.
+
+The setup executable installs hidden startup and Dhruvanta-branded shortcuts by default. Runtime state lives in `%LOCALAPPDATA%\Dhruvanta Systems\PrintAnywhereAgent\data` so versioned program-folder updates preserve pairing, backend URL, printer sharing, and health history.
 
 ## Validation
 
@@ -86,4 +98,5 @@ The release bundle is expected to include the approval-first operator guidance, 
 - `docs/operator-approval-and-recovery.md`
 - `config/agent.env.example`
 - bundled Windows Node runtime
+- Dhruvanta icon assets
 - prebuilt runtime files and launch scripts

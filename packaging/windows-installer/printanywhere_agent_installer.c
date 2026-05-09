@@ -173,6 +173,8 @@ static DWORD run_and_wait(const wchar_t *command_line, const wchar_t *working_di
   ZeroMemory(&startup, sizeof(startup));
   ZeroMemory(&process, sizeof(process));
   startup.cb = sizeof(startup);
+  startup.dwFlags = STARTF_USESHOWWINDOW;
+  startup.wShowWindow = SW_HIDE;
 
   BOOL ok = CreateProcessW(
     NULL,
@@ -180,7 +182,7 @@ static DWORD run_and_wait(const wchar_t *command_line, const wchar_t *working_di
     NULL,
     NULL,
     FALSE,
-    0,
+    CREATE_NO_WINDOW,
     NULL,
     working_dir,
     &startup,
@@ -199,11 +201,40 @@ static DWORD run_and_wait(const wchar_t *command_line, const wchar_t *working_di
   return exit_code;
 }
 
+static int has_quiet_flag(const wchar_t *command_line) {
+  if (!command_line) {
+    return 0;
+  }
+  return wcsstr(command_line, L"/quiet") ||
+    wcsstr(command_line, L"/silent") ||
+    wcsstr(command_line, L"--quiet") ||
+    wcsstr(command_line, L"--silent");
+}
+
+static void launch_powershell_script(
+  const wchar_t *script_path,
+  const wchar_t *bundle_dir,
+  const wchar_t *data_dir,
+  int open_ui
+) {
+  wchar_t args[BUFFER_CHARS];
+  swprintf(
+    args,
+    BUFFER_CHARS,
+    L"-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"%ls\" -DataDir \"%ls\" -Port 43100%ls",
+    script_path,
+    data_dir,
+    open_ui ? L" -OpenUi" : L""
+  );
+  ShellExecuteW(NULL, L"open", L"powershell.exe", args, bundle_dir, SW_HIDE);
+}
+
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, int show_command) {
   (void)instance;
   (void)previous;
-  (void)command_line;
   (void)show_command;
+
+  int quiet = has_quiet_flag(command_line);
 
   wchar_t local_app_data[BUFFER_CHARS];
   DWORD env_length = GetEnvironmentVariableW(L"LOCALAPPDATA", local_app_data, BUFFER_CHARS);
@@ -222,6 +253,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
   wchar_t setup_script[BUFFER_CHARS];
   wchar_t install_cmd[BUFFER_CHARS];
   wchar_t start_cmd[BUFFER_CHARS];
+  wchar_t start_script[BUFFER_CHARS];
+  wchar_t tray_script[BUFFER_CHARS];
+  wchar_t data_dir[BUFFER_CHARS];
 
   if (
     !path_join(install_root, BUFFER_CHARS, local_app_data, INSTALL_ROOT_SUFFIX) ||
@@ -229,7 +263,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
     !path_join(bundle_dir, BUFFER_CHARS, install_root, AGENT_BUNDLE_NAME) ||
     !path_join(setup_script, BUFFER_CHARS, install_root, L"run-printanywhere-agent-install.ps1") ||
     !path_join(install_cmd, BUFFER_CHARS, bundle_dir, L"install-agent.cmd") ||
-    !path_join(start_cmd, BUFFER_CHARS, bundle_dir, L"start-agent.cmd")
+    !path_join(start_cmd, BUFFER_CHARS, bundle_dir, L"start-agent.cmd") ||
+    !path_join(start_script, BUFFER_CHARS, bundle_dir, L"scripts\\start-agent-background.ps1") ||
+    !path_join(tray_script, BUFFER_CHARS, bundle_dir, L"scripts\\agent-tray.ps1") ||
+    !path_join(data_dir, BUFFER_CHARS, install_root, L"data")
   ) {
     show_message(L"PrintAnywhere Agent Setup", L"The install path is too long.", MB_ICONERROR);
     return 1;
@@ -248,10 +285,14 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
   append_assignment(script, BUFFER_CHARS * 2, L"$zip", zip_path);
   append_assignment(script, BUFFER_CHARS * 2, L"$installRoot", install_root);
   append_assignment(script, BUFFER_CHARS * 2, L"$bundleDir", bundle_dir);
+  append_assignment(script, BUFFER_CHARS * 2, L"$dataDir", data_dir);
   append_literal(script, BUFFER_CHARS * 2, L"New-Item -ItemType Directory -Force -Path $installRoot | Out-Null\r\n");
   append_literal(script, BUFFER_CHARS * 2, L"Expand-Archive -LiteralPath $zip -DestinationPath $installRoot -Force\r\n");
   append_literal(script, BUFFER_CHARS * 2, L"Set-Location $bundleDir\r\n");
-  append_literal(script, BUFFER_CHARS * 2, L"& .\\install-agent.cmd\r\n");
+  append_literal(script, BUFFER_CHARS * 2, L"$owners = Get-NetTCPConnection -LocalPort 43100 -ErrorAction SilentlyContinue | Where-Object { $_.OwningProcess -gt 0 -and $_.State -eq \"Listen\" } | Select-Object -ExpandProperty OwningProcess -Unique\r\n");
+  append_literal(script, BUFFER_CHARS * 2, L"foreach ($processId in $owners) { Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue }\r\n");
+  append_literal(script, BUFFER_CHARS * 2, L"Start-Sleep -Seconds 1\r\n");
+  append_literal(script, BUFFER_CHARS * 2, L"& .\\install-agent.cmd -DataDir $dataDir -Port 43100 -RegisterStartupTask -CreateShortcuts\r\n");
 
   if (!write_utf16_file(setup_script, script)) {
     show_last_error(L"PrintAnywhere Agent Setup", L"The installer could not write its PowerShell setup script.");
@@ -281,24 +322,31 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
     return (int)install_exit;
   }
 
-  int start_now = MessageBoxW(
-    NULL,
-    L"PrintAnywhere Agent was installed for this Windows user.\n\nStart the local agent now?",
-    L"PrintAnywhere Agent Setup",
-    MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND
-  );
+  int start_now = IDYES;
+  if (!quiet) {
+    start_now = MessageBoxW(
+      NULL,
+      L"PrintAnywhere Agent was installed for this Windows user.\n\nStart the local agent in the background and open the local UI now?",
+      L"PrintAnywhere Agent Setup",
+      MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND
+    );
+  }
 
   if (start_now == IDYES) {
-    ShellExecuteW(NULL, L"open", start_cmd, NULL, bundle_dir, SW_SHOWNORMAL);
+    launch_powershell_script(start_script, bundle_dir, data_dir, 1);
+    launch_powershell_script(tray_script, bundle_dir, data_dir, 0);
     Sleep(1500);
-    ShellExecuteW(NULL, L"open", LOCAL_UI_URL, NULL, NULL, SW_SHOWNORMAL);
+  }
+
+  if (quiet) {
+    return 0;
   }
 
   wchar_t success[BUFFER_CHARS];
   swprintf(
     success,
     BUFFER_CHARS,
-    L"Installed to:\n%ls\n\nUse start-agent.cmd from that folder when you want to run the local agent.",
+    L"Installed to:\n%ls\n\nDesktop and Start Menu shortcuts were created with the Dhruvanta icon. The agent is configured to start hidden at Windows sign-in, and the tray icon provides open, refresh, restart, stop, and update actions.",
     bundle_dir
   );
   show_message(L"PrintAnywhere Agent Setup", success, MB_ICONINFORMATION);
