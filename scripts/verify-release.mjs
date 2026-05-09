@@ -27,6 +27,7 @@ const requiredPaths = [
   'runtime/node-win-x64/node.exe',
   'scripts/agent-tray.ps1',
   'scripts/check-update.ps1',
+  'scripts/uninstall-agent.ps1',
   'scripts/discover-printers.ps1',
   'scripts/install-release.ps1',
   'scripts/restart-agent.ps1',
@@ -35,6 +36,7 @@ const requiredPaths = [
   'scripts/stop-agent.ps1',
   'start-agent.cmd',
   'update-agent.cmd',
+  'uninstall-agent.cmd',
 ]
 
 const missing = []

@@ -163,6 +163,13 @@ Print packets are downloaded encrypted. The current implementation writes the de
 - Or use the Start Menu shortcuts under `Dhruvanta Systems`.
 - The updater downloads the latest GitHub release setup executable and runs it with the quiet update path.
 
+### How do I uninstall the agent?
+
+- Use Start Menu > `Dhruvanta Systems` > `Uninstall PrintAnywhere Agent`.
+- The uninstall dialog asks whether to keep local data or remove it too.
+- Keeping data preserves pairing state, backend URL, printer sharing choices, and local health history for reinstall.
+- Removing all data deletes those local settings as well as the program files.
+
 ### Pairing code is rejected
 
 - Pairing codes are one-time and expire.

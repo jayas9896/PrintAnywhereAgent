@@ -50,7 +50,7 @@ The following are controlled by the platform admin only:
 8. Wait for the admin to verify the business and approve the machine.
 9. Once the local UI shows the machine is approved, publish one or more platform printers.
 
-The normal Windows install runs the agent hidden in the background, shows a Dhruvanta-branded tray icon, and creates Desktop/Start Menu shortcuts. Use the tray menu for refresh, restart, stop, and update actions. A visible terminal window means the diagnostic console runner was used; close it and start the agent from the shortcut or tray.
+The normal Windows install runs the agent hidden in the background, shows a Dhruvanta-branded tray icon, and creates Desktop/Start Menu shortcuts. Use the tray menu for refresh, restart, stop, and update actions. Use the Start Menu uninstall shortcut when removing the agent; it asks whether to keep or remove local data. A visible terminal window means the diagnostic console runner was used; close it and start the agent from the shortcut or tray.
 
 ## Publishing your first platform printer
 

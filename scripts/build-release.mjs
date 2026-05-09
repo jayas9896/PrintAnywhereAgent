@@ -140,6 +140,10 @@ await writeText(
   '@echo off\r\npowershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0scripts\\check-update.ps1" -Install %*\r\n',
 )
 await writeText(
+  path.join(bundleDir, 'uninstall-agent.cmd'),
+  '@echo off\r\npowershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\\uninstall-agent.ps1" %*\r\n',
+)
+await writeText(
   path.join(bundleDir, 'install-agent.cmd'),
   '@echo off\r\npowershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\\install-release.ps1" %*\r\n',
 )
@@ -149,6 +153,7 @@ await copy(path.join(repoRoot, 'scripts', 'stop-agent.ps1'), path.join(bundleDir
 await copy(path.join(repoRoot, 'scripts', 'restart-agent.ps1'), path.join(bundleDir, 'scripts', 'restart-agent.ps1'))
 await copy(path.join(repoRoot, 'scripts', 'agent-tray.ps1'), path.join(bundleDir, 'scripts', 'agent-tray.ps1'))
 await copy(path.join(repoRoot, 'scripts', 'check-update.ps1'), path.join(bundleDir, 'scripts', 'check-update.ps1'))
+await copy(path.join(repoRoot, 'scripts', 'uninstall-agent.ps1'), path.join(bundleDir, 'scripts', 'uninstall-agent.ps1'))
 await copy(path.join(repoRoot, 'scripts', 'install-release.ps1'), path.join(bundleDir, 'scripts', 'install-release.ps1'))
 await copy(path.join(repoRoot, 'scripts', 'discover-printers.ps1'), path.join(bundleDir, 'scripts', 'discover-printers.ps1'))
 await includeWindowsNodeRuntime()
@@ -178,6 +183,7 @@ await writeText(
         'runtime/node-win-x64/node.exe',
         'scripts/agent-tray.ps1',
         'scripts/check-update.ps1',
+        'scripts/uninstall-agent.ps1',
         'scripts/install-release.ps1',
         'scripts/discover-printers.ps1',
         'scripts/restart-agent.ps1',
@@ -186,6 +192,7 @@ await writeText(
         'scripts/stop-agent.ps1',
         'start-agent.cmd',
         'update-agent.cmd',
+        'uninstall-agent.cmd',
       ],
     },
     null,

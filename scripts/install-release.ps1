@@ -180,6 +180,7 @@ if ($CreateShortcuts) {
     $trayScript = Join-Path $repoRoot "scripts\agent-tray.ps1"
     $stopScript = Join-Path $repoRoot "scripts\stop-agent.ps1"
     $updateScript = Join-Path $repoRoot "scripts\check-update.ps1"
+    $uninstallScript = Join-Path $repoRoot "scripts\uninstall-agent.ps1"
 
     $commonStartArgs = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$startScript`" -EnvFile `"$envFilePath`" -DataDir `"$DataDir`" -Port $Port -OpenUi"
     $commonTrayArgs = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$trayScript`" -EnvFile `"$envFilePath`" -DataDir `"$DataDir`" -Port $Port"
@@ -212,6 +213,10 @@ if ($CreateShortcuts) {
         -ShortcutPath (Join-Path $startMenuDir "Install Latest PrintAnywhere Agent Update.lnk") `
         -Arguments "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$updateScript`" -Install" `
         -Description "Download and install the latest Dhruvanta PrintAnywhere Agent release."
+    New-AgentShortcut `
+        -ShortcutPath (Join-Path $startMenuDir "Uninstall PrintAnywhere Agent.lnk") `
+        -Arguments "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$uninstallScript`" -DataDir `"$DataDir`" -Port $Port" `
+        -Description "Uninstall Dhruvanta PrintAnywhere Agent with a choice to keep or remove local data."
     Write-Host "Created Desktop and Start Menu shortcuts."
 }
 

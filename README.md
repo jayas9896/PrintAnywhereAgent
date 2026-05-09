@@ -151,9 +151,9 @@ Release installs use a stable data directory:
 
 The versioned program folder can change during updates, but pairing state, backend URL, printer sharing choices, and local health data stay in that stable data folder.
 
-The installer creates Dhruvanta-branded shortcuts for opening the local UI, starting the tray controller, stopping the background agent, checking for updates, and installing the latest update.
+The installer creates Dhruvanta-branded shortcuts for opening the local UI, starting the tray controller, stopping the background agent, checking for updates, installing the latest update, and uninstalling the agent. The uninstall shortcut asks whether to keep or remove local data.
 
-The tray menu can open the UI, refresh printer discovery, restart/stop the agent, check for updates, and install the latest GitHub release setup executable.
+The tray menu can open the UI, refresh printer discovery, restart/stop the agent, check for updates, and install the latest GitHub release setup executable. Uninstall is intentionally kept in the Start Menu, not the tray, so it is not clicked accidentally.
 
 ## Security Model
 

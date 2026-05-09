@@ -74,7 +74,7 @@ When sharing the agent with a print-shop owner:
 4. If they use the zip, ask them to run `install-agent.cmd` once, then `start-agent.cmd`.
 5. If they need auto-start at sign-in from a zip bundle, use `scripts/install-release.ps1 -RegisterStartupTask -CreateShortcuts -StartTray`.
 
-The setup executable installs hidden startup and Dhruvanta-branded shortcuts by default. Runtime state lives in `%LOCALAPPDATA%\Dhruvanta Systems\PrintAnywhereAgent\data` so versioned program-folder updates preserve pairing, backend URL, printer sharing, and health history.
+The setup executable installs hidden startup and Dhruvanta-branded shortcuts by default. Runtime state lives in `%LOCALAPPDATA%\Dhruvanta Systems\PrintAnywhereAgent\data` so versioned program-folder updates preserve pairing, backend URL, printer sharing, and health history. The Start Menu also includes one uninstall shortcut that asks whether to keep or remove local data.
 
 ## Validation
 
