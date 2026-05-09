@@ -163,7 +163,9 @@ Print packets are downloaded encrypted. The current implementation writes the de
 
 - Use the tray icon and choose `Check for Updates` or `Install Latest Update`.
 - Or use the Start Menu shortcuts under `Dhruvanta Systems`.
-- The updater downloads the latest GitHub release setup executable and runs it with the quiet update path.
+- `Check for Updates` opens a Dhruvanta update window. If a newer release exists, click `Download and install` in that window.
+- `Install Latest Update` opens the same window and starts the download/install flow immediately.
+- The window shows each step: checking GitHub, downloading the setup executable, downloading checksums, verifying SHA-256, stopping the background agent, and running setup.
 
 ### How do I uninstall the agent?
 

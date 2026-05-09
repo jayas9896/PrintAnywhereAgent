@@ -85,6 +85,12 @@ the setup executable's SHA-256 before running it. A missing checksum file,
 missing setup-exe entry, or checksum mismatch fails closed and leaves the
 existing local install untouched.
 
+The update flow is user-visible. `Check for Updates` opens a Dhruvanta update
+window and enables `Download and install` when a newer release is found.
+`Install Latest Update` opens the same window and starts installation
+immediately. The window logs checking, downloading, checksum verification,
+background-agent stop, installer execution, and completion/error state.
+
 This checksum protects against corrupt or swapped release downloads, but it is
 not a replacement for Windows Authenticode signing. Public end-user releases
 should be signed with an OV/EV code-signing certificate before broader
