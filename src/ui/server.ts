@@ -11,6 +11,7 @@ import type {
   PlatformScalingMode,
   PlatformSidesMode,
 } from '../config/types.js'
+import { defaultPrintAnywhereBackendUrl } from '../config/defaults.js'
 import type { AgentRuntime, PlatformPrinterUpsertInput } from '../runtime/agentRuntime.js'
 
 const COLOR_MODE_OPTIONS: PlatformColorMode[] = ['MONOCHROME', 'COLOR']
@@ -509,6 +510,7 @@ export async function startUiServer(runtime: AgentRuntime) {
     const profile = snapshot.profile
     const platformPrinters = snapshot.platformPrinters ?? []
     const hostLocation = snapshot.hostLocation ?? null
+    const configuredServerUrl = snapshot.serverUrl ?? defaultPrintAnywhereBackendUrl()
 
     response.type('html').send(`<!doctype html>
 <html>
@@ -565,7 +567,8 @@ export async function startUiServer(runtime: AgentRuntime) {
         ${hiddenUiToken(snapshot.uiToken)}
         <label>
           <div class="muted">PrintAnywhere server URL</div>
-          <input type="url" name="serverUrl" value="${htmlEscape(snapshot.serverUrl ?? '')}" placeholder="https://print.example.com" required />
+          <input type="url" name="serverUrl" value="${htmlEscape(configuredServerUrl)}" placeholder="${htmlEscape(defaultPrintAnywhereBackendUrl())}" required />
+          <div class="muted">Production default is prefilled. Change it only for a local test backend or support-directed override.</div>
         </label>
         <label>
           <div class="muted">Display name</div>

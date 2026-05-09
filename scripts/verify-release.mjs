@@ -22,6 +22,7 @@ const requiredPaths = [
   'package.json',
   'release-manifest.json',
   'runtime/node-win-x64/node.exe',
+  'scripts/discover-printers.ps1',
   'scripts/install-release.ps1',
   'scripts/run-agent.ps1',
   'start-agent.cmd',

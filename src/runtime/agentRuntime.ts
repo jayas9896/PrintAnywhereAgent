@@ -13,6 +13,7 @@ import type {
   PollJob,
 } from '../config/types.js'
 import { AgentStore } from '../config/store.js'
+import { AGENT_VERSION, defaultPrintAnywhereBackendUrl } from '../config/defaults.js'
 import { decryptJobPdf, decryptString, encryptString, generateRsaIdentity, unwrapJobKey } from '../core/crypto.js'
 import { deriveMachineKey, getMachineId, isWindows } from '../core/machine.js'
 import { CloudApiClient } from '../cloud/api.js'
@@ -60,7 +61,7 @@ export class AgentRuntime {
   }
 
   async configure(serverUrl: string, displayName?: string | null) {
-    this.state.serverUrl = normalizeServerUrl(serverUrl)
+    this.state.serverUrl = normalizeServerUrl(serverUrl || defaultPrintAnywhereBackendUrl())
     this.state.displayName = displayName?.trim() || null
     this.state.lastError = null
     await this.store.save(this.state)
@@ -241,7 +242,7 @@ export class AgentRuntime {
     const identity = this.requireIdentity()
     const response = await client.register({
       machineId: identity.machineId,
-      agentVersion: '0.1.0',
+      agentVersion: AGENT_VERSION,
       osVersion: `${os.platform()} ${os.release()}`,
       publicKey: identity.publicKeyPem,
       displayName: this.state.displayName,
@@ -302,7 +303,7 @@ export class AgentRuntime {
       const printerStatuses = Object.fromEntries(this.state.printers.map((printer) => [printer.localPrinterName, printer.status]))
       const stats = this.state.stats ?? defaultStats()
       const response = await client.heartbeat(this.requireAgentSecret(), {
-        agentVersion: '0.1.0',
+        agentVersion: AGENT_VERSION,
         uptimeSeconds: Math.floor((Date.now() - this.startedAt) / 1000),
         printerStatuses,
         activeJobCount: stats.activeJobCount,

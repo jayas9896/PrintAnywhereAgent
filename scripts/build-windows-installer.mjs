@@ -10,6 +10,11 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(scriptDir, '..')
 const packageJson = JSON.parse(await fs.readFile(path.join(repoRoot, 'package.json'), 'utf8'))
 const version = packageJson.version
+const versionParts = version
+  .split('.')
+  .map((part) => Number.parseInt(part, 10))
+  .filter((part) => Number.isFinite(part))
+const rcVersion = [...versionParts, 0, 0, 0, 0].slice(0, 4).join(',')
 const artifactName = `printanywhere-agent-v${version}`
 const artifactsDir = path.join(repoRoot, 'artifacts')
 const zipPath = path.join(artifactsDir, `${artifactName}.zip`)
@@ -71,8 +76,8 @@ await fs.writeFile(
     '#include <windows.h>',
     `101 RCDATA "${rcString(zipPath)}"`,
     '1 VERSIONINFO',
-    'FILEVERSION 0,1,0,0',
-    'PRODUCTVERSION 0,1,0,0',
+    `FILEVERSION ${rcVersion}`,
+    `PRODUCTVERSION ${rcVersion}`,
     'FILEOS 0x40004L',
     'FILETYPE 0x1L',
     'BEGIN',

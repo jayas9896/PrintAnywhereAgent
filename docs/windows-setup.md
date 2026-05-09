@@ -19,7 +19,7 @@ The agent runs on the Windows PC connected to the shop printers. It:
 Install these on the Windows machine first:
 
 1. The local Windows printer drivers you want to share
-2. Access to the PrintAnywhere backend URL
+2. Network access to the Dhruvanta PrintAnywhere backend
 
 The `.exe` installer and current release bundle include a Windows Node runtime. A system Node.js install is only needed for source-checkout development.
 
@@ -94,14 +94,20 @@ Supported settings:
 - `PRINTANYWHERE_AGENT_PORT`
 - `PRINTANYWHERE_AGENT_DATA_DIR`
 - `PRINTANYWHERE_AGENT_SIMULATE_PRINT`
+- `PRINTANYWHERE_AGENT_DEFAULT_BACKEND_URL`
 
-The backend URL and display name are configured later in the local UI after the agent starts.
+The production backend URL is prefilled as `https://api.dhruvantasystems.net/printanywhere`.
+Use `PRINTANYWHERE_AGENT_DEFAULT_BACKEND_URL` only for local testing or a support-directed override.
+
+Production backend URL:
+
+- `https://api.dhruvantasystems.net/printanywhere`
 
 ## Registration, approval, and first publish
 
 1. Start the agent.
 2. Open the local UI.
-3. Enter the PrintAnywhere server URL.
+3. Keep the prefilled production backend URL unless support tells you otherwise.
 4. Optionally set a display name for the machine.
 5. Click `Save and register`.
 6. Copy the pairing code shown in the UI.

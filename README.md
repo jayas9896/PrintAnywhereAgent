@@ -66,13 +66,18 @@ On the shop PC, use the release bundle rather than the full source repo:
 5. Review `config\agent.env` if you want to change the local UI port, data directory, or simulation mode.
 6. Start the agent with `start-agent.cmd`.
 7. Open `http://127.0.0.1:43100`.
-8. Enter the PrintAnywhere backend URL and save the registration.
-9. Give the pairing code to the PrintAnywhere admin.
-10. Wait for the admin to verify the business, set the official fallback location, and approve the machine.
-11. After approval, publish customer-facing platform printers from the local Agent UI.
-12. In the Host location panel, capture device location when the host/browser can provide it. Published printers report that location first and fall back to the admin-approved coordinates when capture is unavailable.
+8. The production backend URL is prefilled as `https://api.dhruvantasystems.net/printanywhere`; change it only for local testing or support-directed override.
+9. Click `Save and register`.
+10. Give the pairing code to the PrintAnywhere admin.
+11. Wait for the admin to verify the business, set the official fallback location, and approve the machine.
+12. After approval, publish customer-facing platform printers from the local Agent UI.
+13. In the Host location panel, capture device location when the host/browser can provide it. Published printers report that location first and fall back to the admin-approved coordinates when capture is unavailable.
 
-The backend URL and display name are configured in the local UI, not in the env file.
+The production backend URL is prefilled in the local UI. `PRINTANYWHERE_AGENT_DEFAULT_BACKEND_URL` is available only for local testing or support-directed override.
+
+Production backend URL:
+
+- `https://api.dhruvantasystems.net/printanywhere`
 
 ## Development From Source
 

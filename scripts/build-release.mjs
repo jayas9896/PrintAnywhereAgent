@@ -132,6 +132,7 @@ await writeText(
 )
 await copy(path.join(repoRoot, 'scripts', 'run-agent.ps1'), path.join(bundleDir, 'scripts', 'run-agent.ps1'))
 await copy(path.join(repoRoot, 'scripts', 'install-release.ps1'), path.join(bundleDir, 'scripts', 'install-release.ps1'))
+await copy(path.join(repoRoot, 'scripts', 'discover-printers.ps1'), path.join(bundleDir, 'scripts', 'discover-printers.ps1'))
 await includeWindowsNodeRuntime()
 
 await run(commandName('npm'), ['ci', '--omit=dev'], bundleDir)
@@ -155,6 +156,7 @@ await writeText(
         'package.json',
         'runtime/node-win-x64/node.exe',
         'scripts/install-release.ps1',
+        'scripts/discover-printers.ps1',
         'scripts/run-agent.ps1',
         'start-agent.cmd',
       ],

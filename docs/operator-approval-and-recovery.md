@@ -42,7 +42,8 @@ The following are controlled by the platform admin only:
 1. Install the release bundle or run the source checkout bootstrap.
 2. Start the agent.
 3. Open the local UI at `http://127.0.0.1:43100` unless you changed the port.
-4. Enter the PrintAnywhere backend URL.
+4. Keep the prefilled production backend URL unless support tells you otherwise:
+   `https://api.dhruvantasystems.net/printanywhere`.
 5. Optionally set a machine display name.
 6. Save the registration.
 7. Share the pairing code with the platform admin.
