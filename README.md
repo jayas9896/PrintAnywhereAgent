@@ -151,6 +151,8 @@ Release installs use a stable data directory:
 
 The versioned program folder can change during updates, but pairing state, backend URL, printer sharing choices, and local health data stay in that stable data folder.
 
+The Windows installer hardens the managed `%LOCALAPPDATA%\Dhruvanta Systems\PrintAnywhereAgent` install, config, and data paths with NTFS ACLs. Only the signed-in Windows user running the agent, `SYSTEM`, and local Administrators keep full access. The agent stays per-user instead of using a separate service account because Windows printer discovery and user-session printers are usually only reliable in the signed-in user's session.
+
 The installer creates Dhruvanta-branded shortcuts for opening the local UI, starting the tray controller, stopping the background agent, checking for updates, installing the latest update, and uninstalling the agent. The uninstall shortcut asks whether to keep or remove local data.
 
 The tray menu can open the UI, refresh printer discovery, restart/stop the agent, check for updates, and install the latest GitHub release setup executable. Uninstall is intentionally kept in the Start Menu, not the tray, so it is not clicked accidentally.
@@ -165,6 +167,8 @@ The agent stores:
 - local printer sharing state
 
 The backend queues print jobs as encrypted packets. The agent decrypts them locally and never needs raw backend database access or printer credentials from other integrations.
+
+Release installs also restrict the local install/config/data folders to the current Windows user, `SYSTEM`, and local Administrators. This prevents other Windows users on the same PC from reading the encrypted private key file or modifying the agent program files. It does not protect against malware already running as the same Windows user, so Windows account hygiene, code-signed updates, and backend rate limits remain part of the production security model.
 
 ## Docs
 

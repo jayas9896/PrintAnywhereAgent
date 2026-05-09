@@ -107,6 +107,52 @@ function New-AgentShortcut {
     $shortcut.Save()
 }
 
+function Test-ManagedPerUserInstall {
+    param([string]$RepoRoot)
+
+    if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+        return $false
+    }
+
+    $expectedRoot = Join-Path $env:LOCALAPPDATA "Dhruvanta Systems\PrintAnywhereAgent"
+    return $RepoRoot.StartsWith($expectedRoot, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+function Protect-AgentPath {
+    param(
+        [string]$Path,
+        [switch]$Recursive
+    )
+
+    if (-not (Test-Path $Path)) {
+        return
+    }
+
+    $currentUserSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $icaclsArgs = @(
+        $Path,
+        "/inheritance:r",
+        "/grant:r",
+        ("*{0}:(OI)(CI)(F)" -f $currentUserSid),
+        "*S-1-5-18:(OI)(CI)(F)",
+        "*S-1-5-32-544:(OI)(CI)(F)",
+        "/remove:g",
+        "*S-1-1-0",
+        "*S-1-5-11",
+        "*S-1-5-32-545",
+        "/C"
+    )
+
+    if ($Recursive) {
+        $icaclsArgs += "/T"
+    }
+
+    & icacls @icaclsArgs | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not harden Windows ACLs for $Path."
+    }
+}
+
 $nodeCommand = Resolve-NodeCommand
 
 if (-not (Test-Path "$repoRoot/dist/index.js")) {
@@ -136,6 +182,15 @@ Initialize-StableDataDir -DataDir $DataDir -RepoRoot $repoRoot
 if ((Test-Path $envExamplePath) -and (-not (Test-Path $envFilePath))) {
     Copy-Item $envExamplePath $envFilePath
     Write-Host "Created config\\agent.env from the example file."
+}
+
+if (Test-ManagedPerUserInstall -RepoRoot $repoRoot) {
+    $installRoot = Split-Path -Parent $repoRoot
+    Protect-AgentPath -Path $installRoot
+    Protect-AgentPath -Path $repoRoot -Recursive
+    Protect-AgentPath -Path $DataDir -Recursive
+    Protect-AgentPath -Path $configDir -Recursive
+    Write-Host "Hardened agent install, config, and data ACLs for this Windows user, SYSTEM, and Administrators."
 }
 
 if ($RegisterStartupTask) {

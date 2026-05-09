@@ -76,6 +76,8 @@ When sharing the agent with a print-shop owner:
 
 The setup executable installs hidden startup and Dhruvanta-branded shortcuts by default. Runtime state lives in `%LOCALAPPDATA%\Dhruvanta Systems\PrintAnywhereAgent\data` so versioned program-folder updates preserve pairing, backend URL, printer sharing, and health history. The Start Menu also includes one uninstall shortcut that asks whether to keep or remove local data.
 
+During install, `scripts/install-release.ps1` hardens the managed `%LOCALAPPDATA%\Dhruvanta Systems\PrintAnywhereAgent` install root, versioned program folder, `config`, and `data` folders with NTFS ACLs. Only the signed-in Windows user, `SYSTEM`, and local Administrators keep full access. The default remains a per-user hidden background task so Windows printer discovery runs in the same user session as the shop owner.
+
 ## Release Integrity
 
 The updater downloads `SHA256SUMS.txt` from the same GitHub release and verifies

@@ -111,6 +111,8 @@ Release installs keep runtime state in a stable folder across updates:
 
 The program folder is versioned, but pairing state, backend URL, printer sharing choices, and local health history stay in that stable data folder.
 
+The installer locks the managed install, config, and data folders with Windows NTFS ACLs. Access is limited to the signed-in Windows user running the agent, `SYSTEM`, and local Administrators. A separate Windows service account is not used by default because many printers are only visible in the interactive user session.
+
 ## Registration, approval, and first publish
 
 1. Start the agent.
