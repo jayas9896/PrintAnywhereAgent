@@ -36,6 +36,7 @@ try {
     $release = Invoke-RestMethod -Uri $apiUrl -Headers @{ "User-Agent" = "PrintAnywhereAgentUpdater" }
     $latestVersion = ([string]$release.tag_name).TrimStart("v")
     $setupAsset = $release.assets | Where-Object { $_.name -like "*-setup.exe" } | Select-Object -First 1
+    $checksumAsset = $release.assets | Where-Object { $_.name -eq "SHA256SUMS.txt" } | Select-Object -First 1
 
     if (-not $setupAsset) {
         throw "Latest release $($release.tag_name) does not include a setup executable."
@@ -59,8 +60,26 @@ try {
     $downloadDir = Join-Path $env:TEMP "PrintAnywhereAgentUpdates"
     New-Item -ItemType Directory -Force -Path $downloadDir | Out-Null
     $downloadPath = Join-Path $downloadDir $setupAsset.name
+    $checksumPath = Join-Path $downloadDir "SHA256SUMS.txt"
 
     Invoke-WebRequest -Uri $setupAsset.browser_download_url -OutFile $downloadPath -Headers @{ "User-Agent" = "PrintAnywhereAgentUpdater" }
+    if (-not $checksumAsset) {
+        throw "Latest release $($release.tag_name) does not include SHA256SUMS.txt."
+    }
+    Invoke-WebRequest -Uri $checksumAsset.browser_download_url -OutFile $checksumPath -Headers @{ "User-Agent" = "PrintAnywhereAgentUpdater" }
+
+    $escapedName = [regex]::Escape($setupAsset.name)
+    $checksumLine = Get-Content $checksumPath |
+        Where-Object { $_ -match "^[A-Fa-f0-9]{64}\s+(.*/)?$escapedName$" } |
+        Select-Object -First 1
+    if (-not $checksumLine) {
+        throw "SHA256SUMS.txt does not include $($setupAsset.name)."
+    }
+    $expectedHash = (($checksumLine -split "\s+")[0]).ToLowerInvariant()
+    $actualHash = ((Get-FileHash -Path $downloadPath -Algorithm SHA256).Hash).ToLowerInvariant()
+    if ($actualHash -ne $expectedHash) {
+        throw "Downloaded installer checksum mismatch. Expected $expectedHash but got $actualHash."
+    }
 
     & (Join-Path $PSScriptRoot "stop-agent.ps1") -ErrorAction SilentlyContinue
     Start-Process -FilePath $downloadPath -ArgumentList "/quiet" -Wait
