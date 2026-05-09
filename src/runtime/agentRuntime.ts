@@ -180,6 +180,7 @@ export class AgentRuntime {
     try {
       const printers = await discoverPrinters(this.state.sharedPrinters)
       this.state.printers = printers
+      this.state.lastError = null
       await this.store.save(this.state)
       await this.registerIfNeeded(false)
       await this.reportPrinters()
@@ -317,6 +318,7 @@ export class AgentRuntime {
         ...this.requireRegistration(),
         status: response.agentStatus,
       }
+      this.state.lastError = null
       await this.store.save(this.state)
       await this.refreshCloudState()
     } catch (error) {
