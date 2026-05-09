@@ -15,6 +15,13 @@ const artifactsDir = path.join(repoRoot, 'artifacts')
 const bundleDir = path.join(artifactsDir, artifactName)
 const archivePath = path.join(artifactsDir, `${artifactName}.tar.gz`)
 const zipPath = path.join(artifactsDir, `${artifactName}.zip`)
+const nodeRuntimeVersion = process.env.PRINTANYWHERE_AGENT_NODE_RUNTIME_VERSION || 'v22.22.2'
+const nodeRuntimeArchiveName = `node-${nodeRuntimeVersion}-win-x64.zip`
+const nodeRuntimeUrl = `https://nodejs.org/dist/${nodeRuntimeVersion}/${nodeRuntimeArchiveName}`
+const cacheDir = path.join(artifactsDir, 'cache')
+const nodeRuntimeArchivePath = path.join(cacheDir, nodeRuntimeArchiveName)
+const nodeRuntimeExtractDir = path.join(cacheDir, `node-${nodeRuntimeVersion}-win-x64`)
+const nodeRuntimeBundleDir = path.join(bundleDir, 'runtime', 'node-win-x64')
 
 async function run(command, args, cwd = repoRoot) {
   await new Promise((resolve, reject) => {
@@ -54,6 +61,54 @@ async function hashFile(filePath) {
   return crypto.createHash('sha256').update(file).digest('hex')
 }
 
+async function pathExists(targetPath) {
+  try {
+    await fs.access(targetPath)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function downloadFile(url, destination) {
+  await fs.mkdir(path.dirname(destination), { recursive: true })
+  const response = await fetch(url)
+  if (!response.ok) {
+    throw new Error(`Download failed with HTTP ${response.status}`)
+  }
+
+  await fs.writeFile(destination, Buffer.from(await response.arrayBuffer()))
+}
+
+async function extractZip(source, destination) {
+  await fs.mkdir(destination, { recursive: true })
+  if (process.platform === 'win32') {
+    await run('powershell.exe', [
+      '-NoProfile',
+      '-Command',
+      `Expand-Archive -LiteralPath "${source}" -DestinationPath "${destination}" -Force`,
+    ])
+    return
+  }
+
+  await run('python3', ['-m', 'zipfile', '-e', source, destination])
+}
+
+async function includeWindowsNodeRuntime() {
+  if (!(await pathExists(nodeRuntimeArchivePath))) {
+    console.log(`Downloading Windows Node runtime ${nodeRuntimeVersion}...`)
+    await downloadFile(nodeRuntimeUrl, nodeRuntimeArchivePath)
+  }
+
+  if (!(await pathExists(path.join(nodeRuntimeExtractDir, 'node.exe')))) {
+    await fs.rm(nodeRuntimeExtractDir, { recursive: true, force: true })
+    await extractZip(nodeRuntimeArchivePath, cacheDir)
+  }
+
+  await fs.rm(nodeRuntimeBundleDir, { recursive: true, force: true })
+  await copy(nodeRuntimeExtractDir, nodeRuntimeBundleDir)
+}
+
 await run(commandName('npm'), ['run', 'build'])
 
 await fs.rm(bundleDir, { recursive: true, force: true })
@@ -77,6 +132,7 @@ await writeText(
 )
 await copy(path.join(repoRoot, 'scripts', 'run-agent.ps1'), path.join(bundleDir, 'scripts', 'run-agent.ps1'))
 await copy(path.join(repoRoot, 'scripts', 'install-release.ps1'), path.join(bundleDir, 'scripts', 'install-release.ps1'))
+await includeWindowsNodeRuntime()
 
 await run(commandName('npm'), ['ci', '--omit=dev'], bundleDir)
 
@@ -97,6 +153,7 @@ await writeText(
         'install-agent.cmd',
         'node_modules/',
         'package.json',
+        'runtime/node-win-x64/node.exe',
         'scripts/install-release.ps1',
         'scripts/run-agent.ps1',
         'start-agent.cmd',

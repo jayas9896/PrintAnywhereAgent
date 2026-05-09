@@ -24,7 +24,21 @@ function Require-Command {
     }
 }
 
-Require-Command -Name "node" -InstallHint "Install Node.js 20 or newer from https://nodejs.org/en/download"
+function Resolve-NodeCommand {
+    $bundledNode = Join-Path $repoRoot "runtime\node-win-x64\node.exe"
+    if (Test-Path $bundledNode) {
+        return $bundledNode
+    }
+
+    $pathNode = Get-Command node -ErrorAction SilentlyContinue
+    if ($pathNode) {
+        return $pathNode.Source
+    }
+
+    throw "Node.js was not found. Use the Windows installer/release bundle with bundled runtime, or install Node.js 20+ first."
+}
+
+$nodeCommand = Resolve-NodeCommand
 
 if (-not (Test-Path "$repoRoot/dist/index.js")) {
     throw "dist/index.js is missing. Rebuild the release bundle before distributing it."
@@ -67,6 +81,7 @@ if ($RegisterStartupTask) {
 
 Write-Host ""
 Write-Host "Release bundle install completed."
+Write-Host "Node runtime: $nodeCommand"
 Write-Host "Next steps:"
 Write-Host "1. Review config\\agent.env if you want to change the port, data folder, or simulation mode."
 Write-Host "2. Start the agent with start-agent.cmd or:"

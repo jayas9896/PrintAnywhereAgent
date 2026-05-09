@@ -1,6 +1,6 @@
 {
   "name": "printanywhere-agent",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "description": "Windows-first PrintAnywhere Print Agent for public print-shop owners",
@@ -10,7 +10,8 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "release:build": "node ./scripts/build-release.mjs && node ./scripts/verify-release.mjs",
-    "release:verify": "node ./scripts/verify-release.mjs"
+    "release:verify": "node ./scripts/verify-release.mjs",
+    "release:windows-installer": "node ./scripts/build-release.mjs && node ./scripts/verify-release.mjs && node ./scripts/build-windows-installer.mjs"
   },
   "dependencies": {
     "express": "^5.1.0",

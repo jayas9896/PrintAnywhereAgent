@@ -36,8 +36,18 @@ function Import-EnvFile {
     }
 }
 
-if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-    throw "Node.js was not found on PATH. Install Node.js 20+ first."
+function Resolve-NodeCommand {
+    $bundledNode = Join-Path $repoRoot "runtime\node-win-x64\node.exe"
+    if (Test-Path $bundledNode) {
+        return $bundledNode
+    }
+
+    $pathNode = Get-Command node -ErrorAction SilentlyContinue
+    if ($pathNode) {
+        return $pathNode.Source
+    }
+
+    throw "Node.js was not found. Use the Windows installer/release bundle with bundled runtime, or install Node.js 20+ first."
 }
 
 if (-not (Test-Path "$repoRoot/dist/index.js")) {
@@ -93,4 +103,7 @@ if (-not [string]::IsNullOrWhiteSpace($EnvFile)) {
     Write-Host "Environment file: $EnvFile"
 }
 
-node "$repoRoot/dist/index.js"
+$nodeCommand = Resolve-NodeCommand
+Write-Host "Node runtime: $nodeCommand"
+
+& $nodeCommand "$repoRoot/dist/index.js"

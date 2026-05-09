@@ -18,14 +18,16 @@ The agent runs on the Windows PC connected to the shop printers. It:
 
 Install these on the Windows machine first:
 
-1. Node.js 20 or newer
-   - Download: https://nodejs.org/en/download
-2. The local Windows printer drivers you want to share
-3. Access to the PrintAnywhere backend URL
+1. The local Windows printer drivers you want to share
+2. Access to the PrintAnywhere backend URL
+
+The `.exe` installer and current release bundle include a Windows Node runtime. A system Node.js install is only needed for source-checkout development.
 
 ## Preferred Install: Release Bundle
 
-If someone handed you a prebuilt `PrintAnywhereAgent` release bundle, use that folder instead of the source repo.
+If someone handed you `printanywhere-agent-v<version>-setup.exe`, run that installer first. It extracts the release bundle into your per-user local app data folder, runs the bundle installer, and can start the local agent when it finishes.
+
+If someone handed you a prebuilt `PrintAnywhereAgent` zip release bundle instead, use that folder instead of the source repo.
 
 One-time setup from PowerShell inside the extracted bundle:
 
@@ -41,7 +43,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install-release.ps1 -Register
 
 That installer:
 
-- checks that Node.js is installed
+- checks that the bundled Windows Node runtime or system Node.js is available
 - verifies the prebuilt runtime files are present
 - creates the local data directory
 - copies `config\agent.env` from the example file if needed

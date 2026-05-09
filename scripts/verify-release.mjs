@@ -21,6 +21,7 @@ const requiredPaths = [
   'node_modules',
   'package.json',
   'release-manifest.json',
+  'runtime/node-win-x64/node.exe',
   'scripts/install-release.ps1',
   'scripts/run-agent.ps1',
   'start-agent.cmd',

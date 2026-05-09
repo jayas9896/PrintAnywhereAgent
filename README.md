@@ -29,12 +29,23 @@ That command builds the app and creates a versioned release bundle in `artifacts
 - `artifacts/printanywhere-agent-v<version>.zip`
 - `artifacts/SHA256SUMS.txt`
 
+For end-user Windows installs, build the self-extracting setup executable:
+
+```bash
+npm run release:windows-installer
+```
+
+That adds:
+
+- `artifacts/printanywhere-agent-v<version>-setup.exe`
+
 The release build now also verifies that the operator docs and runtime files are present in the assembled bundle.
 
 Each bundle contains only the operator-facing runtime assets:
 
 - prebuilt `dist/`
 - production-only `node_modules/`
+- bundled Windows Node runtime under `runtime/node-win-x64/`
 - `config/agent.env.example`
 - Windows install/start helpers
 - operator docs
@@ -43,22 +54,23 @@ Each bundle contains only the operator-facing runtime assets:
 
 On the shop PC, use the release bundle rather than the full source repo:
 
-1. Extract `printanywhere-agent-v<version>`.
-2. Run `install-agent.cmd` once.
-3. If you want the agent to start automatically at sign-in, run:
+1. Prefer `printanywhere-agent-v<version>-setup.exe`.
+2. Run the setup executable and choose whether to start the agent when it finishes.
+3. If you use the zip instead, extract `printanywhere-agent-v<version>.zip` and run `install-agent.cmd` once.
+4. If you want the agent to start automatically at sign-in, run:
 
    ```powershell
    powershell -ExecutionPolicy Bypass -File .\scripts\install-release.ps1 -RegisterStartupTask
    ```
 
-4. Review `config\agent.env` if you want to change the local UI port, data directory, or simulation mode.
-5. Start the agent with `start-agent.cmd`.
-6. Open `http://127.0.0.1:43100`.
-7. Enter the PrintAnywhere backend URL and save the registration.
-8. Give the pairing code to the PrintAnywhere admin.
-9. Wait for the admin to verify the business, set the official fallback location, and approve the machine.
-10. After approval, publish customer-facing platform printers from the local Agent UI.
-11. In the Host location panel, capture device location when the host/browser can provide it. Published printers report that location first and fall back to the admin-approved coordinates when capture is unavailable.
+5. Review `config\agent.env` if you want to change the local UI port, data directory, or simulation mode.
+6. Start the agent with `start-agent.cmd`.
+7. Open `http://127.0.0.1:43100`.
+8. Enter the PrintAnywhere backend URL and save the registration.
+9. Give the pairing code to the PrintAnywhere admin.
+10. Wait for the admin to verify the business, set the official fallback location, and approve the machine.
+11. After approval, publish customer-facing platform printers from the local Agent UI.
+12. In the Host location panel, capture device location when the host/browser can provide it. Published printers report that location first and fall back to the admin-approved coordinates when capture is unavailable.
 
 The backend URL and display name are configured in the local UI, not in the env file.
 
@@ -162,6 +174,7 @@ This repo targets the backend Print Agent API exposed by the main `PrintAnywhere
 - `src/platform/printers.ts` local printer discovery and print execution
 - `src/ui/server.ts` local operator UI
 - `scripts/build-release.mjs` release artifact assembler
+- `scripts/build-windows-installer.mjs` Windows setup executable builder
 - `scripts/install-release.ps1` Windows install helper for prebuilt bundles
 - `scripts/bootstrap-windows.ps1` Windows setup helper for source checkouts
 - `scripts/run-agent.ps1` production-style launcher with optional env-file support

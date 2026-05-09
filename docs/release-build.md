@@ -7,9 +7,11 @@ This repo now ships with a release assembly step intended for public distributio
 ```bash
 npm ci
 npm run release:build
+npm run release:windows-installer
 ```
 
 The release script runs the existing TypeScript build first, then assembles a clean artifact in `artifacts/`.
+The Windows installer script wraps that bundle in a self-extracting setup executable for non-technical shop owners.
 
 ## Output
 
@@ -18,6 +20,7 @@ Expected output:
 ```text
 artifacts/
 ├── SHA256SUMS.txt
+├── printanywhere-agent-v<version>-setup.exe
 ├── printanywhere-agent-v<version>/
 │   ├── README.md
 │   ├── config/
@@ -29,6 +32,8 @@ artifacts/
 │   ├── package-lock.json
 │   ├── package.json
 │   ├── release-manifest.json
+│   ├── runtime/
+│   │   └── node-win-x64/
 │   ├── scripts/
 │   │   ├── install-release.ps1
 │   │   └── run-agent.ps1
@@ -43,6 +48,7 @@ The bundle intentionally excludes the development-only parts of the repo and kee
 
 - prebuilt runtime files from `dist/`
 - production dependencies from `npm ci --omit=dev`
+- bundled Windows Node runtime from the official Node.js distribution
 - operator docs
 - sample env file
 - install/start helpers
@@ -52,10 +58,11 @@ The bundle intentionally excludes the development-only parts of the repo and kee
 
 When sharing the agent with a print-shop owner:
 
-1. Prefer the versioned folder or the generated `.tar.gz`, not the full git checkout.
-2. Point them to `README.md` and `docs/windows-setup.md`.
-3. Ask them to run `install-agent.cmd` once, then `start-agent.cmd`.
-4. If they need auto-start at sign-in, use `scripts/install-release.ps1 -RegisterStartupTask`.
+1. Prefer `printanywhere-agent-v<version>-setup.exe` for non-technical Windows users.
+2. Use the generated `.zip` only when the operator wants to inspect the bundle before install.
+3. Point them to `README.md` and `docs/windows-setup.md`.
+4. If they use the zip, ask them to run `install-agent.cmd` once, then `start-agent.cmd`.
+5. If they need auto-start at sign-in, use `scripts/install-release.ps1 -RegisterStartupTask`.
 
 ## Validation
 
@@ -64,6 +71,7 @@ At minimum, validate:
 ```bash
 npm run build
 npm run release:build
+npm run release:windows-installer
 npm run release:verify
 ```
 
@@ -77,4 +85,5 @@ The release bundle is expected to include the approval-first operator guidance, 
 - `docs/windows-setup.md`
 - `docs/operator-approval-and-recovery.md`
 - `config/agent.env.example`
+- bundled Windows Node runtime
 - prebuilt runtime files and launch scripts
