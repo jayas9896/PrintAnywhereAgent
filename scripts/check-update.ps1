@@ -295,6 +295,78 @@ function Set-UpdateBusy {
     }
 }
 
+function Stop-AgentTrayProcesses {
+    $installRoot = Join-Path $env:LOCALAPPDATA "Dhruvanta Systems\PrintAnywhereAgent"
+    $currentPid = $PID
+    $trayProcesses = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object {
+            $commandLine = [string]$_.CommandLine
+            $_.ProcessId -ne $currentPid -and
+            -not [string]::IsNullOrWhiteSpace($commandLine) -and
+            $commandLine -match "agent-tray\.ps1" -and
+            (
+                $commandLine -match "PrintAnywhereAgent" -or
+                $commandLine.StartsWith($installRoot, [System.StringComparison]::OrdinalIgnoreCase)
+            )
+        }
+
+    foreach ($process in $trayProcesses) {
+        try {
+            Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
+            Write-UpdateStep "Closed existing tray controller process $($process.ProcessId)."
+        } catch {
+            Write-UpdateStep "Could not close existing tray controller process $($process.ProcessId): $($_.Exception.Message)"
+        }
+    }
+}
+
+function Invoke-SetupExecutable {
+    param(
+        [string]$Path,
+        [string]$Arguments = "/quiet",
+        [int]$TimeoutSeconds = 600
+    )
+
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $Path
+    $startInfo.Arguments = $Arguments
+    $startInfo.WorkingDirectory = Split-Path -Parent $Path
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $startInfo
+    if (-not $process.Start()) {
+        throw "Could not start setup executable."
+    }
+
+    $startedAt = Get-Date
+    $lastStatusAt = $startedAt.AddSeconds(-30)
+    while (-not $process.WaitForExit(1000)) {
+        $elapsed = [int]((Get-Date) - $startedAt).TotalSeconds
+        if ($elapsed -ge $TimeoutSeconds) {
+            try {
+                $process.Kill()
+            } catch {
+                # Best effort only; surface the timeout below.
+            }
+            throw "Setup did not finish within $TimeoutSeconds seconds."
+        }
+
+        if (((Get-Date) - $lastStatusAt).TotalSeconds -ge 10) {
+            Write-UpdateStep "Setup is still running ($elapsed seconds elapsed)..."
+            $lastStatusAt = Get-Date
+        } elseif (-not $Console -and $script:UpdateForm) {
+            $script:UpdateForm.Refresh()
+            [System.Windows.Forms.Application]::DoEvents()
+        }
+    }
+
+    if ($process.ExitCode -ne 0) {
+        throw "Setup exited with code $($process.ExitCode)."
+    }
+}
+
 function Get-LatestReleaseInfo {
     $apiUrl = "https://api.github.com/repos/$Repo/releases/latest"
 
@@ -423,11 +495,12 @@ function Install-LatestRelease {
         throw "Downloaded installer checksum mismatch. Expected $expectedHash but got $actualHash."
     }
 
-    Write-UpdateStep "Stopping the running background agent before update..."
+    Write-UpdateStep "Stopping the running background agent and old tray controller before update..."
     & (Join-Path $PSScriptRoot "stop-agent.ps1") -ErrorAction SilentlyContinue
+    Stop-AgentTrayProcesses
 
     Write-UpdateStep "Installing $($script:Release.tag_name). This window will update when setup finishes..."
-    Start-Process -FilePath $downloadPath -ArgumentList "/quiet" -Wait
+    Invoke-SetupExecutable -Path $downloadPath -Arguments "/quiet"
 
     Write-UpdateStep "Update installed: $($script:Release.tag_name). The agent will continue running in the background and at Windows sign-in."
 }

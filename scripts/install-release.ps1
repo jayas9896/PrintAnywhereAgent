@@ -164,6 +164,26 @@ function Protect-AgentPath {
     }
 }
 
+function Stop-ExistingTrayControllers {
+    $installRoot = Join-Path $env:LOCALAPPDATA "Dhruvanta Systems\PrintAnywhereAgent"
+    $currentPid = $PID
+    $trayProcesses = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object {
+            $commandLine = [string]$_.CommandLine
+            $_.ProcessId -ne $currentPid -and
+            -not [string]::IsNullOrWhiteSpace($commandLine) -and
+            $commandLine -match "agent-tray\.ps1" -and
+            (
+                $commandLine -match "PrintAnywhereAgent" -or
+                $commandLine.StartsWith($installRoot, [System.StringComparison]::OrdinalIgnoreCase)
+            )
+        }
+
+    foreach ($process in $trayProcesses) {
+        Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+}
+
 $nodeCommand = Resolve-NodeCommand
 
 if (-not (Test-Path "$repoRoot/dist/index.js")) {
@@ -287,6 +307,7 @@ if ($CreateShortcuts) {
 }
 
 if ($StartTray) {
+    Stop-ExistingTrayControllers
     $trayScript = Join-Path $repoRoot "scripts\agent-tray.ps1"
     Start-Process `
         -FilePath "powershell.exe" `

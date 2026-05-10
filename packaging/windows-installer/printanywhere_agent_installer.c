@@ -289,6 +289,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
   append_literal(script, BUFFER_CHARS * 2, L"New-Item -ItemType Directory -Force -Path $installRoot | Out-Null\r\n");
   append_literal(script, BUFFER_CHARS * 2, L"Expand-Archive -LiteralPath $zip -DestinationPath $installRoot -Force\r\n");
   append_literal(script, BUFFER_CHARS * 2, L"Set-Location $bundleDir\r\n");
+  append_literal(script, BUFFER_CHARS * 2, L"$trayProcesses = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $commandLine = [string]$_.CommandLine; $_.ProcessId -ne $PID -and -not [string]::IsNullOrWhiteSpace($commandLine) -and $commandLine -match \"agent-tray\\.ps1\" -and ($commandLine -match \"PrintAnywhereAgent\" -or $commandLine.StartsWith($installRoot, [System.StringComparison]::OrdinalIgnoreCase)) }\r\n");
+  append_literal(script, BUFFER_CHARS * 2, L"foreach ($process in $trayProcesses) { Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue }\r\n");
   append_literal(script, BUFFER_CHARS * 2, L"$owners = Get-NetTCPConnection -LocalPort 43100 -ErrorAction SilentlyContinue | Where-Object { $_.OwningProcess -gt 0 -and $_.State -eq \"Listen\" } | Select-Object -ExpandProperty OwningProcess -Unique\r\n");
   append_literal(script, BUFFER_CHARS * 2, L"foreach ($processId in $owners) { Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue }\r\n");
   append_literal(script, BUFFER_CHARS * 2, L"Start-Sleep -Seconds 1\r\n");

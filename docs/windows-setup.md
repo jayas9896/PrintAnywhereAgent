@@ -178,7 +178,8 @@ Print packets are downloaded encrypted. The current implementation writes the de
 - Or use the Start Menu shortcuts under `Dhruvanta Systems`.
 - `Check for Updates` opens a Dhruvanta update window. If a newer release exists, click `Download and install` in that window.
 - `Install Latest Update` opens the same window and starts the download/install flow immediately.
-- The window shows each step: checking GitHub, downloading the setup executable with progress, downloading checksums, verifying SHA-256, stopping the background agent, and running setup.
+- The window shows each step: checking GitHub, downloading the setup executable with progress, downloading checksums, verifying SHA-256, stopping the background agent and old tray controller, and running setup.
+- The updater waits only for the setup executable to exit, not for the new background agent or tray processes it launches.
 - If the installed version is already current, `Check for Updates` shows a `Reinstall latest` option for support-directed repair installs.
 
 ### How do I uninstall the agent?

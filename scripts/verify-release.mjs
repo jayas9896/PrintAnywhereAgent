@@ -74,12 +74,12 @@ const textChecks = [
   },
   {
     file: 'scripts/check-update.ps1',
-    mustInclude: ['Download and install', 'Bring-UpdateWindowToFront', 'Update window opened.'],
-    mustNotInclude: [],
+    mustInclude: ['Download and install', 'Bring-UpdateWindowToFront', 'Update window opened.', 'Invoke-SetupExecutable', 'Stop-AgentTrayProcesses'],
+    mustNotInclude: ['Start-Process -FilePath $downloadPath -ArgumentList "/quiet" -Wait'],
   },
   {
     file: 'scripts/install-release.ps1',
-    mustInclude: ['"/reset"', 'repair inherited Windows ACLs'],
+    mustInclude: ['"/reset"', 'repair inherited Windows ACLs', 'Stop-ExistingTrayControllers'],
     mustNotInclude: ['$icaclsArgs += "/T"'],
   },
 ]
