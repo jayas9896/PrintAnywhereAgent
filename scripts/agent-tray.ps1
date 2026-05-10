@@ -87,11 +87,17 @@ $refreshItem.Add_Click({ Refresh-Printers })
 
 $menu.Items.Add("-") | Out-Null
 
-$checkUpdateItem = $menu.Items.Add("Check for Updates")
-$checkUpdateItem.Add_Click({ Invoke-AgentScript "check-update.ps1" @() })
+$checkUpdateItem = $menu.Items.Add("Check for Updates...")
+$checkUpdateItem.Add_Click({
+    Show-Balloon "PrintAnywhere Agent" "Opening the update window."
+    Invoke-AgentScript "check-update.ps1" @()
+})
 
-$installUpdateItem = $menu.Items.Add("Install Latest Update")
-$installUpdateItem.Add_Click({ Invoke-AgentScript "check-update.ps1" @("-Install") })
+$installUpdateItem = $menu.Items.Add("Install Latest Update...")
+$installUpdateItem.Add_Click({
+    Show-Balloon "PrintAnywhere Agent" "Opening the update window and starting the latest installer."
+    Invoke-AgentScript "check-update.ps1" @("-Install")
+})
 
 $menu.Items.Add("-") | Out-Null
 

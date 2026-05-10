@@ -153,9 +153,9 @@ The versioned program folder can change during updates, but pairing state, backe
 
 The Windows installer hardens the managed `%LOCALAPPDATA%\Dhruvanta Systems\PrintAnywhereAgent` install, config, and data paths with NTFS ACLs. Only the signed-in Windows user running the agent, `SYSTEM`, and local Administrators keep full access. The agent stays per-user instead of using a separate service account because Windows printer discovery and user-session printers are usually only reliable in the signed-in user's session.
 
-The installer creates Dhruvanta-branded shortcuts for opening the local UI, starting the tray controller, stopping the background agent, checking for updates, installing the latest update, and uninstalling the agent. The update shortcuts open a progress window that shows checking, downloading, checksum verification, agent stop, and installer status. The uninstall shortcut asks whether to keep or remove local data.
+The installer creates Dhruvanta-branded shortcuts for opening the local UI, starting the tray controller, stopping the background agent, checking for updates, installing the latest update, and uninstalling the agent. The update shortcuts open a progress window that shows checking, download percentage, checksum verification, agent stop, and installer status. The uninstall shortcut asks whether to keep or remove local data.
 
-The tray menu can open the UI, refresh printer discovery, restart/stop the agent, check for updates, and install the latest GitHub release setup executable. `Check for Updates` now offers a `Download and install` button in the same window when a newer release exists. Uninstall is intentionally kept in the Start Menu, not the tray, so it is not clicked accidentally.
+The tray menu can open the UI, refresh printer discovery, restart/stop the agent, check for updates, and install the latest GitHub release setup executable. `Check for Updates` offers a `Download and install` button in the same window when a newer release exists, and offers `Reinstall latest` when the installed version is already current and support asks the owner to repair the install. Uninstall is intentionally kept in the Start Menu, not the tray, so it is not clicked accidentally.
 
 ## Security Model
 

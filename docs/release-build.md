@@ -88,8 +88,10 @@ existing local install untouched.
 The update flow is user-visible. `Check for Updates` opens a Dhruvanta update
 window and enables `Download and install` when a newer release is found.
 `Install Latest Update` opens the same window and starts installation
-immediately. The window logs checking, downloading, checksum verification,
-background-agent stop, installer execution, and completion/error state.
+immediately. The window logs checking, percentage download progress, checksum
+verification, background-agent stop, installer execution, and completion/error
+state. When the installed version is already current, the check window offers a
+support-directed `Reinstall latest` action instead of failing silently.
 
 This checksum protects against corrupt or swapped release downloads, but it is
 not a replacement for Windows Authenticode signing. Public end-user releases

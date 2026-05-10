@@ -150,6 +150,46 @@ function Set-ProgressMode {
     }
 }
 
+function Set-ProgressPercent {
+    param(
+        [string]$Activity,
+        [int]$Percent
+    )
+
+    $boundedPercent = [Math]::Max(0, [Math]::Min(100, $Percent))
+
+    if ($Console) {
+        Write-Progress -Activity $Activity -Status "$boundedPercent%" -PercentComplete $boundedPercent
+        return
+    }
+
+    if (-not $script:ProgressBar) {
+        return
+    }
+
+    $script:ProgressBar.Style = "Blocks"
+    $script:ProgressBar.MarqueeAnimationSpeed = 0
+    $script:ProgressBar.Value = $boundedPercent
+    $script:StatusLabel.Text = "$Activity ($boundedPercent%)"
+    $script:UpdateForm.Refresh()
+    [System.Windows.Forms.Application]::DoEvents()
+}
+
+function Complete-Progress {
+    param([string]$Activity)
+
+    if ($Console) {
+        Write-Progress -Activity $Activity -Completed
+        return
+    }
+
+    if ($script:ProgressBar) {
+        $script:ProgressBar.Style = "Blocks"
+        $script:ProgressBar.MarqueeAnimationSpeed = 0
+        $script:ProgressBar.Value = 100
+    }
+}
+
 function Write-UpdateStep {
     param([string]$Message)
 
@@ -183,6 +223,9 @@ function Set-UpdateBusy {
 
     $script:IsBusy = $Busy
     if (-not $Console) {
+        if ($Busy -and $script:InstallButton) {
+            $script:InstallButton.Enabled = $false
+        }
         $script:CloseButton.Enabled = -not $Busy
         Set-ProgressMode $Busy
     }
@@ -210,6 +253,78 @@ function Get-LatestReleaseInfo {
     }
 }
 
+function Save-ReleaseAsset {
+    param(
+        [object]$Asset,
+        [string]$Destination,
+        [string]$Activity
+    )
+
+    if (-not $Asset -or [string]::IsNullOrWhiteSpace([string]$Asset.browser_download_url)) {
+        throw "Release asset URL is missing for $Activity."
+    }
+
+    if (Test-Path $Destination) {
+        Remove-Item -Force $Destination
+    }
+
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $request = [System.Net.HttpWebRequest]::Create([string]$Asset.browser_download_url)
+    $request.UserAgent = "PrintAnywhereAgentUpdater"
+    $request.AllowAutoRedirect = $true
+
+    $response = $null
+    $inputStream = $null
+    $outputStream = $null
+    $lastLoggedPercent = -1
+
+    try {
+        $response = $request.GetResponse()
+        $inputStream = $response.GetResponseStream()
+        $outputStream = [System.IO.File]::Open($Destination, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+        $buffer = New-Object byte[] 65536
+        $totalBytes = [int64]$response.ContentLength
+        $downloadedBytes = [int64]0
+
+        if ($totalBytes -le 0) {
+            Set-ProgressMode $true
+        }
+
+        while (($read = $inputStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+            $outputStream.Write($buffer, 0, $read)
+            $downloadedBytes += $read
+
+            if ($totalBytes -gt 0) {
+                $percent = [int][Math]::Floor(($downloadedBytes * 100.0) / $totalBytes)
+                $percent = [Math]::Max(0, [Math]::Min(100, $percent))
+                if ($percent -eq 100 -or $percent -ge ($lastLoggedPercent + 5)) {
+                    Set-ProgressPercent -Activity $Activity -Percent $percent
+                    $lastLoggedPercent = $percent
+                }
+            } else {
+                if (-not $Console) {
+                    $script:StatusLabel.Text = $Activity
+                    $script:UpdateForm.Refresh()
+                    [System.Windows.Forms.Application]::DoEvents()
+                }
+            }
+        }
+    } finally {
+        if ($outputStream) {
+            $outputStream.Dispose()
+        }
+        if ($inputStream) {
+            $inputStream.Dispose()
+        }
+        if ($response) {
+            $response.Close()
+        }
+    }
+
+    Complete-Progress -Activity $Activity
+    Write-UpdateStep "$Activity completed."
+}
+
 function Install-LatestRelease {
     if (-not $script:Release -or -not $script:SetupAsset) {
         throw "No available release has been selected for installation."
@@ -225,10 +340,10 @@ function Install-LatestRelease {
     $checksumPath = Join-Path $downloadDir "SHA256SUMS.txt"
 
     Write-UpdateStep "Downloading setup executable $($script:SetupAsset.name)..."
-    Invoke-WebRequest -UseBasicParsing -Uri $script:SetupAsset.browser_download_url -OutFile $downloadPath -Headers @{ "User-Agent" = "PrintAnywhereAgentUpdater" }
+    Save-ReleaseAsset -Asset $script:SetupAsset -Destination $downloadPath -Activity "Downloading setup executable"
 
     Write-UpdateStep "Downloading checksum manifest SHA256SUMS.txt..."
-    Invoke-WebRequest -UseBasicParsing -Uri $script:ChecksumAsset.browser_download_url -OutFile $checksumPath -Headers @{ "User-Agent" = "PrintAnywhereAgentUpdater" }
+    Save-ReleaseAsset -Asset $script:ChecksumAsset -Destination $checksumPath -Activity "Downloading checksum manifest"
 
     Write-UpdateStep "Verifying downloaded setup executable checksum..."
     $escapedName = [regex]::Escape($script:SetupAsset.name)
@@ -287,6 +402,18 @@ function Invoke-UpdateWorkflow {
 
         if ([version]$latestVersion -eq [version]$currentVersion) {
             Write-UpdateStep "PrintAnywhere Agent is up to date."
+            if ($AutoInstall) {
+                Write-UpdateStep "Reinstalling the latest release because Install Latest Update was selected."
+                Invoke-VisibleInstall
+                return
+            }
+            if ($Console) {
+                Write-UpdateStep "Run this script with -Install if support asks you to reinstall the current latest release."
+            } else {
+                $script:InstallButton.Text = "Reinstall latest"
+                $script:InstallButton.Enabled = $true
+                Write-UpdateStep "The current latest release can be reinstalled from this window if support asks you to repair the install."
+            }
             return
         }
 
@@ -296,6 +423,7 @@ function Invoke-UpdateWorkflow {
             if ($Console) {
                 Write-UpdateStep "Run this script with -Install to download and install the update."
             } else {
+                $script:InstallButton.Text = "Download and install"
                 $script:InstallButton.Enabled = $true
                 Write-UpdateStep "Click Download and install to update now."
             }
