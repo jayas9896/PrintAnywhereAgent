@@ -27,6 +27,12 @@ The `.exe` installer and current release bundle include a Windows Node runtime. 
 
 If someone handed you `printanywhere-agent-v<version>-setup.exe`, run that installer first. It extracts the release bundle into your per-user local app data folder, runs the bundle installer, creates Dhruvanta-branded shortcuts, registers hidden startup at Windows sign-in, starts the tray controller, and can open the local agent UI when it finishes.
 
+For public customer installs, the Windows security prompt should show
+Dhruvanta Systems as the verified publisher. If it shows `Unknown
+publisher`, the setup executable was not Authenticode-signed with the
+Dhruvanta Systems code-signing certificate and should be treated as a
+test build.
+
 If someone handed you a prebuilt `PrintAnywhereAgent` zip release bundle instead, use that folder instead of the source repo.
 
 One-time setup from PowerShell inside the extracted bundle:

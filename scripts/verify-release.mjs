@@ -18,6 +18,7 @@ const requiredPaths = [
   'config/agent.env.example',
   'dist/index.js',
   'docs/windows-setup.md',
+  'docs/code-signing.md',
   'docs/operator-approval-and-recovery.md',
   'install-agent.cmd',
   'node_modules',

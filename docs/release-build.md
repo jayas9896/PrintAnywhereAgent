@@ -95,10 +95,12 @@ support-directed `Reinstall latest` action instead of failing silently.
 
 This checksum protects against corrupt or swapped release downloads, but it is
 not a replacement for Windows Authenticode signing. Public end-user releases
-should be signed with an OV/EV code-signing certificate before broader
-distribution so Windows can validate publisher identity and SmartScreen can
-build reputation. A self-signed certificate is acceptable only for internal lab
-testing because customer machines will not trust it by default.
+must be signed with an OV/EV code-signing certificate issued to Dhruvanta
+Systems before broader distribution so Windows can validate publisher identity
+and SmartScreen can build reputation. A self-signed certificate is acceptable
+only for internal lab testing because customer machines will not trust it by
+default. See `docs/code-signing.md` for the release env vars and secret-file
+layout.
 
 ## Validation
 

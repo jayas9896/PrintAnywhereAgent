@@ -39,6 +39,11 @@ That adds:
 
 - `artifacts/printanywhere-agent-v<version>-setup.exe`
 
+For public customer installs, sign the setup executable with the
+Dhruvanta Systems OV/EV Windows code-signing certificate so Windows
+shows Dhruvanta Systems instead of `Unknown publisher`. See
+`docs/code-signing.md`.
+
 The release build now also verifies that the operator docs and runtime files are present in the assembled bundle.
 
 Each bundle contains only the operator-facing runtime assets:
