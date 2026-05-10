@@ -60,14 +60,21 @@ export class AgentRuntime {
     return !!this.state.uiToken && !!token && this.state.uiToken === token
   }
 
-  async configure(serverUrl: string, displayName?: string | null) {
-    this.state.serverUrl = normalizeServerUrl(serverUrl || defaultPrintAnywhereBackendUrl())
+  async configure(serverUrl: string, displayName?: string | null, reportedBusinessAddress?: string | null) {
+    const nextServerUrl = normalizeServerUrl(serverUrl || defaultPrintAnywhereBackendUrl())
+    const previousServerUrl = this.state.serverUrl ? normalizeServerUrl(this.state.serverUrl) : null
+    const hasExistingRegistration = !!this.state.registration?.agentId && !!this.state.registration?.encryptedAgentSecret
+    this.state.serverUrl = nextServerUrl
     this.state.displayName = displayName?.trim() || null
+    this.state.reportedBusinessAddress = reportedBusinessAddress?.trim() || null
     this.state.lastError = null
     await this.store.save(this.state)
-    await this.registerIfNeeded(true)
+    if (!hasExistingRegistration || previousServerUrl !== nextServerUrl) {
+      await this.registerIfNeeded(true)
+    }
     await this.syncPrinters()
     await this.refreshHostLocation()
+    await this.heartbeatTick()
   }
 
   async setPrinterShared(localPrinterName: string, shared: boolean) {
@@ -313,6 +320,7 @@ export class AgentRuntime {
       const hostLocation = this.state.hostLocation ?? null
       const response = await client.heartbeat(this.requireAgentSecret(), {
         agentVersion: AGENT_VERSION,
+        displayName: this.state.displayName ?? null,
         uptimeSeconds: Math.floor((Date.now() - this.startedAt) / 1000),
         printerStatuses,
         activeJobCount: stats.activeJobCount,
@@ -320,6 +328,7 @@ export class AgentRuntime {
         failedJobsToday: stats.failedJobsToday,
         memoryUsageMb: Math.round(process.memoryUsage().rss / 1024 / 1024),
         diskFreeGb: 0,
+        reportedBusinessAddress: this.state.reportedBusinessAddress ?? null,
         ...platformLocationPayload(hostLocation),
       })
       this.state.lastHeartbeatAt = response.serverTime

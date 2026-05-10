@@ -58,6 +58,13 @@ const agentProfileSchema = z.object({
   businessAddress: z.string().nullish(),
   businessLatitude: z.number().nullish(),
   businessLongitude: z.number().nullish(),
+  reportedBusinessAddress: z.string().nullish(),
+  reportedLatitude: z.number().nullish(),
+  reportedLongitude: z.number().nullish(),
+  reportedLocationAccuracyMeters: z.number().nullish(),
+  reportedLocationSource: z.string().nullish(),
+  reportedLocationCapturedAt: z.string().nullish(),
+  reportedLocationReceivedAt: z.string().nullish(),
   approvedAt: z.string().nullish(),
   approvedByUserId: z.string().nullish(),
   agentVersion: z.string().nullish(),
@@ -211,6 +218,7 @@ export class CloudApiClient {
     agentSecret: string,
     payload: {
       agentVersion: string
+      displayName?: string | null
       uptimeSeconds: number
       printerStatuses: Record<string, AgentPrinterStatus>
       activeJobCount: number
@@ -218,6 +226,7 @@ export class CloudApiClient {
       failedJobsToday: number
       memoryUsageMb: number
       diskFreeGb: number
+      reportedBusinessAddress?: string | null
       reportedLatitude?: number | null
       reportedLongitude?: number | null
       reportedLocationAccuracyMeters?: number | null

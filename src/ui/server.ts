@@ -151,6 +151,14 @@ function redirectWithStatus(response: Response, type: 'notice' | 'error', messag
   response.redirect(url.pathname + url.search)
 }
 
+function friendlyConfigureError(error: unknown) {
+  const message = error instanceof Error ? error.message : 'Configuration failed'
+  if (message.includes('Machine is already registered') || message.includes('"code":"CONFLICT"')) {
+    return 'This machine is already registered in PrintAnywhere. This form will not create another machine. Save settings on the existing registration, generate a new pairing code if support asks you to re-pair, or ask an admin to review the existing machine.'
+  }
+  return message
+}
+
 function findConstraint(printer: PlatformPrinter | null | undefined, type: string) {
   return printer?.documentConstraints.find((constraint) => constraint.type === type)?.configuration ?? {}
 }
@@ -511,6 +519,7 @@ export async function startUiServer(runtime: AgentRuntime) {
     const platformPrinters = snapshot.platformPrinters ?? []
     const hostLocation = snapshot.hostLocation ?? null
     const configuredServerUrl = snapshot.serverUrl ?? defaultPrintAnywhereBackendUrl()
+    const isRegistered = !!snapshot.registration?.agentId
 
     response.type('html').send(`<!doctype html>
 <html>
@@ -574,7 +583,13 @@ export async function startUiServer(runtime: AgentRuntime) {
           <div class="muted">Display name</div>
           <input type="text" name="displayName" value="${htmlEscape(snapshot.displayName ?? '')}" placeholder="Counter PC - Front Desk" />
         </label>
-        <button type="submit">Save and register</button>
+        <label>
+          <div class="muted">Business address for admin review</div>
+          <input type="text" name="reportedBusinessAddress" value="${htmlEscape(snapshot.reportedBusinessAddress ?? profile?.reportedBusinessAddress ?? '')}" placeholder="Shop number, street, city, state" />
+          <div class="muted">This is shown to PrintAnywhere admins with the device-reported location before approval. Admin still verifies the final business profile.</div>
+        </label>
+        ${isRegistered ? `<div class="muted">This machine is already registered. Saving updates local settings and sends the latest address/location on the next heartbeat; it does not create another machine.</div>` : ''}
+        <button type="submit">${isRegistered ? 'Save settings' : 'Save and register'}</button>
       </form>
     </div>
 
@@ -601,6 +616,14 @@ export async function startUiServer(runtime: AgentRuntime) {
             profile?.businessLatitude != null && profile?.businessLongitude != null
               ? `${profile.businessLatitude}, ${profile.businessLongitude}`
               : 'Pending admin review',
+          )}</div>
+          <div class="muted" style="margin-top:12px;">Agent/client reported address</div>
+          <div>${htmlEscape(profile?.reportedBusinessAddress ?? snapshot.reportedBusinessAddress ?? 'Not reported')}</div>
+          <div class="muted" style="margin-top:12px;">Agent/client reported coordinates</div>
+          <div>${htmlEscape(
+            profile?.reportedLatitude != null && profile?.reportedLongitude != null
+              ? `${profile.reportedLatitude}, ${profile.reportedLongitude}`
+              : 'Not reported',
           )}</div>
           <div class="muted" style="margin-top:12px;">Approved at</div>
           <div>${htmlEscape(formatTimestamp(profile?.approvedAt, 'Not approved'))}</div>
@@ -829,10 +852,14 @@ export async function startUiServer(runtime: AgentRuntime) {
   app.post('/configure', async (request, response) => {
     if (!verifyUiRequest(runtime, request, response)) return
     try {
-      await runtime.configure(String(request.body.serverUrl ?? ''), String(request.body.displayName ?? ''))
-      redirectWithStatus(response, 'notice', 'Backend configuration saved and agent registration refreshed.')
+      await runtime.configure(
+        String(request.body.serverUrl ?? ''),
+        String(request.body.displayName ?? ''),
+        String(request.body.reportedBusinessAddress ?? ''),
+      )
+      redirectWithStatus(response, 'notice', 'Backend configuration saved. Existing registrations are updated by heartbeat without creating another machine.')
     } catch (error) {
-      redirectWithStatus(response, 'error', error instanceof Error ? error.message : 'Configuration failed')
+      redirectWithStatus(response, 'error', friendlyConfigureError(error))
     }
   })
 

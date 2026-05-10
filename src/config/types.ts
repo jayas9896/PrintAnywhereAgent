@@ -105,6 +105,13 @@ export interface AgentProfile {
   businessAddress?: string | null
   businessLatitude?: number | null
   businessLongitude?: number | null
+  reportedBusinessAddress?: string | null
+  reportedLatitude?: number | null
+  reportedLongitude?: number | null
+  reportedLocationAccuracyMeters?: number | null
+  reportedLocationSource?: string | null
+  reportedLocationCapturedAt?: string | null
+  reportedLocationReceivedAt?: string | null
   approvedAt?: string | null
   approvedByUserId?: string | null
   agentVersion?: string | null
@@ -148,6 +155,7 @@ export interface PlatformPrinter {
 export interface AgentState {
   serverUrl?: string | null
   displayName?: string | null
+  reportedBusinessAddress?: string | null
   identity?: StoredIdentity | null
   registration?: AgentRegistrationState | null
   uiToken?: string | null
