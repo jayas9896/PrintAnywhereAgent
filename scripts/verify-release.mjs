@@ -2,7 +2,7 @@
 
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(scriptDir, '..')
@@ -135,6 +135,14 @@ for (const check of textChecks) {
       process.exit(1)
     }
   }
+}
+
+const bundledDefaults = await import(pathToFileURL(path.join(bundleDir, 'dist/config/defaults.js')).href)
+if (bundledDefaults.AGENT_VERSION !== version) {
+  console.error(
+    `Release bundle ${artifactName} runtime version mismatch: expected ${version}, got ${bundledDefaults.AGENT_VERSION}`,
+  )
+  process.exit(1)
 }
 
 async function exists(filePath) {

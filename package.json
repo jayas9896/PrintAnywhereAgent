@@ -1,6 +1,6 @@
 {
   "name": "printanywhere-agent",
-  "version": "0.1.22",
+  "version": "0.1.23",
   "private": true,
   "type": "module",
   "description": "Windows-first PrintAnywhere Print Agent for public print-shop owners",
