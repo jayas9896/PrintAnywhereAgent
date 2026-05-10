@@ -5,7 +5,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { signWindowsExecutable } from './lib/windows-codesign.mjs'
+import { exportCodesignPublicArtifacts, signWindowsExecutable } from './lib/windows-codesign.mjs'
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(scriptDir, '..')
@@ -127,6 +127,13 @@ await run('x86_64-w64-mingw32-gcc', [
 const signing = await signWindowsExecutable(installerPath)
 if (signing.signed) {
   console.log(`Windows installer Authenticode signed with ${signing.tool}.`)
+  const exported = await exportCodesignPublicArtifacts(artifactsDir, {
+    installerPath,
+    version,
+  })
+  if (exported.exported) {
+    console.log('Code-signing public certificate artifacts exported.')
+  }
 } else {
   console.log(`Windows installer is unsigned: ${signing.reason}`)
 }

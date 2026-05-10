@@ -1,4 +1,7 @@
+import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 import { spawn } from 'node:child_process'
 
 const DEFAULT_TIMESTAMP_URL = 'http://timestamp.digicert.com'
@@ -45,6 +48,37 @@ async function run(command, args, redactedArgs = args) {
   })
 }
 
+async function runCapture(command, args, redactedArgs = args) {
+  return await new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      shell: false,
+    })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString('utf8')
+    })
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString('utf8')
+    })
+
+    child.on('error', reject)
+    child.on('exit', (code) => {
+      if (code === 0) {
+        resolve(stdout)
+        return
+      }
+
+      reject(
+        new Error(
+          `${command} ${redactedArgs.join(' ')} exited with code ${code ?? 'unknown'}${stderr ? `\n${stderr}` : ''}`,
+        ),
+      )
+    })
+  })
+}
+
 async function readPassword() {
   const direct = process.env.PRINTANYWHERE_CODESIGN_PASSWORD?.trim()
   if (direct) return direct
@@ -53,6 +87,17 @@ async function readPassword() {
   if (passwordFile) return (await fs.readFile(passwordFile, 'utf8')).trim()
 
   return ''
+}
+
+async function withPasswordFile(password, callback) {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'printanywhere-codesign-'))
+  const passwordPath = path.join(tempDir, 'password.txt')
+  await fs.writeFile(passwordPath, password, { mode: 0o600 })
+  try {
+    return await callback(passwordPath)
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true })
+  }
 }
 
 async function resolveSigningTool() {
@@ -112,6 +157,161 @@ async function loadCodesignConfig(required) {
   }
 }
 
+function shouldTimestamp(timestampUrl) {
+  return !['', '0', 'false', 'none', 'off', 'disabled'].includes(timestampUrl.trim().toLowerCase())
+}
+
+async function sha256File(filePath) {
+  const file = await fs.readFile(filePath)
+  return crypto.createHash('sha256').update(file).digest('hex')
+}
+
+async function updateSha256Sums(artifactsDir, relativePaths) {
+  const sumsPath = path.join(artifactsDir, 'SHA256SUMS.txt')
+  let sums = ''
+  try {
+    sums = await fs.readFile(sumsPath, 'utf8')
+  } catch {
+    // Created below.
+  }
+
+  const relativeSet = new Set(relativePaths)
+  const preserved = sums
+    .split(/\r?\n/)
+    .filter((line) => {
+      if (!line.trim()) return false
+      const relativePath = line.split(/\s\s+/).at(-1)
+      return !relativeSet.has(relativePath)
+    })
+
+  const nextLines = [...preserved]
+  for (const relativePath of relativePaths) {
+    nextLines.push(`${await sha256File(path.join(artifactsDir, relativePath))}  ${relativePath}`)
+  }
+
+  await fs.writeFile(sumsPath, `${nextLines.join('\n')}\n`, 'utf8')
+}
+
+export async function exportCodesignPublicArtifacts(artifactsDir, options = {}) {
+  const config = await loadCodesignConfig(Boolean(options.required))
+  if (!config.enabled) {
+    return { exported: false, reason: config.reason }
+  }
+  if (!(await commandAvailable('openssl'))) {
+    throw new Error('openssl is required to export code-signing public certificate artifacts.')
+  }
+
+  await fs.mkdir(artifactsDir, { recursive: true })
+  const publicPemName = 'dhruvanta-systems-codesign-public.pem'
+  const publicCerName = 'dhruvanta-systems-codesign-public.cer'
+  const fingerprintName = 'dhruvanta-systems-codesign-fingerprint.txt'
+  const integrityName = 'RELEASE-INTEGRITY.txt'
+  const publicPemPath = path.join(artifactsDir, publicPemName)
+  const publicCerPath = path.join(artifactsDir, publicCerName)
+  const fingerprintPath = path.join(artifactsDir, fingerprintName)
+  const integrityPath = path.join(artifactsDir, integrityName)
+
+  await withPasswordFile(config.password, async (passwordPath) => {
+    await run(
+      'openssl',
+      [
+        'pkcs12',
+        '-in',
+        config.certPath,
+        '-clcerts',
+        '-nokeys',
+        '-passin',
+        `file:${passwordPath}`,
+        '-out',
+        publicPemPath,
+      ],
+      ['pkcs12', '-in', config.certPath, '-clcerts', '-nokeys', '-passin', 'file:<redacted>', '-out', publicPemPath],
+    )
+  })
+
+  await run('openssl', ['x509', '-in', publicPemPath, '-outform', 'DER', '-out', publicCerPath])
+  const certDetails = await runCapture('openssl', [
+    'x509',
+    '-in',
+    publicPemPath,
+    '-noout',
+    '-subject',
+    '-issuer',
+    '-serial',
+    '-dates',
+    '-sha256',
+    '-fingerprint',
+    '-ext',
+    'keyUsage',
+    '-ext',
+    'extendedKeyUsage',
+  ])
+
+  const installerPath = options.installerPath ? path.resolve(options.installerPath) : null
+  const installerLine =
+    installerPath && (await pathExists(installerPath))
+      ? `installer_sha256=${await sha256File(installerPath)}\ninstaller_file=${path.basename(installerPath)}\n`
+      : ''
+
+  await fs.writeFile(
+    fingerprintPath,
+    [
+      '# Dhruvanta Systems self-signed code-signing public certificate',
+      '# This certificate lets operators verify the installer signature manually.',
+      '# It does not make Windows trust the publisher on customer machines.',
+      certDetails.trim(),
+      '',
+      `public_pem_sha256=${await sha256File(publicPemPath)}`,
+      `public_cer_sha256=${await sha256File(publicCerPath)}`,
+      installerLine.trim(),
+      '',
+    ]
+      .filter(Boolean)
+      .join('\n'),
+    'utf8',
+  )
+
+  await fs.writeFile(
+    integrityPath,
+    [
+      '# PrintAnywhere Agent release integrity',
+      `version=${options.version ?? 'unknown'}`,
+      `generated_at=${new Date().toISOString()}`,
+      'publisher=Dhruvanta Systems',
+      'certificate_mode=self-signed',
+      'windows_publisher_trust=unknown_until_an_ov_or_ev_certificate_is_used',
+      '',
+      'Verification files:',
+      `- ${publicPemName}`,
+      `- ${publicCerName}`,
+      `- ${fingerprintName}`,
+      `- ${integrityName}`,
+      '- SHA256SUMS.txt',
+      '',
+      'Windows manual verification:',
+      '1. Download the setup exe, SHA256SUMS.txt, and dhruvanta-systems-codesign-public.cer from the same release.',
+      '2. Check the setup exe hash against SHA256SUMS.txt.',
+      '3. Run: Get-AuthenticodeSignature .\\printanywhere-agent-v<version>-setup.exe | Format-List',
+      '4. Compare the signer certificate thumbprint with dhruvanta-systems-codesign-fingerprint.txt.',
+      '',
+      'Linux/WSL verification:',
+      'osslsigncode verify -CAfile artifacts/dhruvanta-systems-codesign-public.pem -in artifacts/printanywhere-agent-v<version>-setup.exe',
+      'sha256sum -c artifacts/SHA256SUMS.txt',
+      '',
+    ].join('\n'),
+    'utf8',
+  )
+
+  await updateSha256Sums(artifactsDir, [publicPemName, publicCerName, fingerprintName, integrityName])
+  return {
+    exported: true,
+    publicPemPath,
+    publicCerPath,
+    fingerprintPath,
+    integrityPath,
+  }
+}
+
 export async function signWindowsExecutable(executablePath, options = {}) {
   const config = await loadCodesignConfig(Boolean(options.required))
   if (!config.enabled) {
@@ -130,10 +330,6 @@ export async function signWindowsExecutable(executablePath, options = {}) {
       'sign',
       '/fd',
       'SHA256',
-      '/tr',
-      config.timestampUrl,
-      '/td',
-      'SHA256',
       '/f',
       config.certPath,
       '/p',
@@ -144,6 +340,9 @@ export async function signWindowsExecutable(executablePath, options = {}) {
       config.productUrl,
       executablePath,
     ]
+    if (shouldTimestamp(config.timestampUrl)) {
+      args.splice(3, 0, '/tr', config.timestampUrl, '/td', 'SHA256')
+    }
     const redactedArgs = args.map((arg, index) => (args[index - 1] === '/p' ? '<redacted>' : arg))
     await run(tool.command, args, redactedArgs)
     return { signed: true, tool: tool.kind }
@@ -161,13 +360,14 @@ export async function signWindowsExecutable(executablePath, options = {}) {
     config.description,
     '-i',
     config.productUrl,
-    '-t',
-    config.timestampUrl,
     '-in',
     executablePath,
     '-out',
     signedPath,
   ]
+  if (shouldTimestamp(config.timestampUrl)) {
+    args.splice(args.indexOf('-in'), 0, '-t', config.timestampUrl)
+  }
   const redactedArgs = args.map((arg, index) => (args[index - 1] === '-pass' ? '<redacted>' : arg))
   await run(tool.command, args, redactedArgs)
   await fs.rename(signedPath, executablePath)

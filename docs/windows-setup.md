@@ -33,6 +33,13 @@ publisher`, the setup executable was not Authenticode-signed with the
 Dhruvanta Systems code-signing certificate and should be treated as a
 test build.
 
+During internal testing, Dhruvanta may publish a self-signed build. In
+that case, download `SHA256SUMS.txt`,
+`dhruvanta-systems-codesign-fingerprint.txt`, and
+`dhruvanta-systems-codesign-public.cer` from the same release, verify
+the setup executable hash, and compare the Authenticode signer
+thumbprint with the published fingerprint.
+
 If someone handed you a prebuilt `PrintAnywhereAgent` zip release bundle instead, use that folder instead of the source repo.
 
 One-time setup from PowerShell inside the extracted bundle:

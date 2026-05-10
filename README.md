@@ -44,6 +44,12 @@ Dhruvanta Systems OV/EV Windows code-signing certificate so Windows
 shows Dhruvanta Systems instead of `Unknown publisher`. See
 `docs/code-signing.md`.
 
+For internal testing before the OV/EV certificate is available, the
+release can be signed with the host-local Dhruvanta self-signed
+certificate. In that mode, upload the generated public cert,
+fingerprint, `RELEASE-INTEGRITY.txt`, and `SHA256SUMS.txt` beside the
+installer so the operator can manually verify the Authenticode signer.
+
 The release build now also verifies that the operator docs and runtime files are present in the assembled bundle.
 
 Each bundle contains only the operator-facing runtime assets:

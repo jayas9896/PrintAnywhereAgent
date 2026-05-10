@@ -4,7 +4,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { signWindowsExecutable } from './lib/windows-codesign.mjs'
+import { exportCodesignPublicArtifacts, signWindowsExecutable } from './lib/windows-codesign.mjs'
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(scriptDir, '..')
@@ -48,4 +48,12 @@ if (!result.signed) {
 }
 
 await updateChecksum()
+const exported = await exportCodesignPublicArtifacts(artifactsDir, {
+  installerPath,
+  version,
+  required,
+})
+if (exported.exported) {
+  console.log('Code-signing public certificate artifacts exported.')
+}
 console.log(`Windows installer signed with ${result.tool} and SHA256SUMS.txt updated.`)

@@ -85,6 +85,19 @@ the setup executable's SHA-256 before running it. A missing checksum file,
 missing setup-exe entry, or checksum mismatch fails closed and leaves the
 existing local install untouched.
 
+Internal self-signed releases also publish:
+
+- `dhruvanta-systems-codesign-public.cer`
+- `dhruvanta-systems-codesign-public.pem`
+- `dhruvanta-systems-codesign-fingerprint.txt`
+- `RELEASE-INTEGRITY.txt`
+
+These files are public verification material for the Authenticode
+signature. They let an operator compare the setup executable's signer
+certificate thumbprint with the published Dhruvanta self-signed
+certificate. They do not make Windows trust the publisher; a real OV/EV
+certificate is still required before broad customer distribution.
+
 The update flow is user-visible. `Check for Updates` opens a Dhruvanta update
 window and enables `Download and install` when a newer release is found.
 `Install Latest Update` opens the same window and starts installation
