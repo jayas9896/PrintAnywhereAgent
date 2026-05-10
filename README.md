@@ -79,11 +79,11 @@ On the shop PC, use the release bundle rather than the full source repo:
 6. Start the agent with the Desktop shortcut, Start Menu shortcut, tray menu, or `start-agent.cmd`. These start the runtime hidden instead of keeping a terminal window on top.
 7. Open `http://127.0.0.1:43100`.
 8. The production backend URL is prefilled as `https://api.dhruvantasystems.net/printanywhere`; change it only for local testing or support-directed override.
-9. Click `Save and register`.
+9. Click `Save and register`; allow the browser location prompt when the machine can share device location for admin verification.
 10. Give the pairing code to the PrintAnywhere admin.
 11. Wait for the admin to verify the business, set the official fallback location, and approve the machine.
 12. After approval, publish customer-facing platform printers from the local Agent UI.
-13. In the Host location panel, capture device location when the host/browser can provide it. Published printers report that location first and fall back to the admin-approved coordinates when capture is unavailable.
+13. Use the Host location panel later if the location needs to be refreshed. Published printers report the latest device location first and fall back to the admin-approved coordinates when capture is unavailable.
 
 The production backend URL is prefilled in the local UI. `PRINTANYWHERE_AGENT_DEFAULT_BACKEND_URL` is available only for local testing or support-directed override.
 
