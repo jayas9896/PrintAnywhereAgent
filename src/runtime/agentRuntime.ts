@@ -67,6 +67,7 @@ export class AgentRuntime {
     await this.store.save(this.state)
     await this.registerIfNeeded(true)
     await this.syncPrinters()
+    await this.refreshHostLocation()
   }
 
   async setPrinterShared(localPrinterName: string, shared: boolean) {
@@ -83,7 +84,11 @@ export class AgentRuntime {
     try {
       const location = await detectHostLocation()
       if (!location) {
-        return this.state.hostLocation ?? null
+        const cachedLocation = this.state.hostLocation ?? null
+        if (cachedLocation) {
+          await this.heartbeatTick()
+        }
+        return cachedLocation
       }
       this.state.hostLocation = location
       this.state.lastError = null
