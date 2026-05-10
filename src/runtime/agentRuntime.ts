@@ -303,6 +303,7 @@ export class AgentRuntime {
       const client = this.requireClient()
       const printerStatuses = Object.fromEntries(this.state.printers.map((printer) => [printer.localPrinterName, printer.status]))
       const stats = this.state.stats ?? defaultStats()
+      const hostLocation = this.state.hostLocation ?? null
       const response = await client.heartbeat(this.requireAgentSecret(), {
         agentVersion: AGENT_VERSION,
         uptimeSeconds: Math.floor((Date.now() - this.startedAt) / 1000),
@@ -312,6 +313,7 @@ export class AgentRuntime {
         failedJobsToday: stats.failedJobsToday,
         memoryUsageMb: Math.round(process.memoryUsage().rss / 1024 / 1024),
         diskFreeGb: 0,
+        ...platformLocationPayload(hostLocation),
       })
       this.state.lastHeartbeatAt = response.serverTime
       this.state.registration = {

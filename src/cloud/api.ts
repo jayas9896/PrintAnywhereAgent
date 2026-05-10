@@ -218,6 +218,11 @@ export class CloudApiClient {
       failedJobsToday: number
       memoryUsageMb: number
       diskFreeGb: number
+      reportedLatitude?: number | null
+      reportedLongitude?: number | null
+      reportedLocationAccuracyMeters?: number | null
+      reportedLocationSource?: string | null
+      reportedLocationCapturedAt?: string | null
     },
   ) {
     const response = await fetch(`${this.serverUrl}/api/agent/heartbeat`, {
