@@ -97,13 +97,26 @@ const textChecks = [
       'Stop-ExistingTrayControllers',
       'Stop-ExistingAgentRuntime',
       'Remove-OlderManagedVersions',
+      'managedRuntimeProcesses',
       'older managed PrintAnywhere Agent install artifact',
     ],
     mustNotInclude: ['$icaclsArgs += "/T"'],
   },
   {
+    file: 'scripts/stop-agent.ps1',
+    mustInclude: [
+      'managed install path',
+      'dist[\\\\/]+index\\.js',
+      'node-win-x64[\\\\/]+node\\.exe',
+    ],
+    mustNotInclude: [],
+  },
+  {
     file: 'docs/windows-setup.md',
-    mustInclude: ['After setup exits, the updater starts the refreshed background agent and tray through the registered Windows Scheduled Tasks'],
+    mustInclude: [
+      'After setup exits, the updater starts the refreshed background agent and tray through the registered Windows Scheduled Tasks',
+      'stops any older managed PrintAnywhere Agent process by local UI port and by managed install path',
+    ],
     mustNotInclude: [],
   },
 ]

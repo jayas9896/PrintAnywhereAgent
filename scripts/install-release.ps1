@@ -232,16 +232,42 @@ function Stop-ExistingTrayControllers {
 function Stop-ExistingAgentRuntime {
     param([int]$Port)
 
+    $installRoot = Join-Path $env:LOCALAPPDATA "Dhruvanta Systems\PrintAnywhereAgent"
     $owners = Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue |
         Where-Object { $_.OwningProcess -gt 0 -and $_.State -eq "Listen" } |
         Select-Object -ExpandProperty OwningProcess -Unique
 
-    foreach ($processId in $owners) {
+    $managedRuntimeProcesses = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object {
+            $commandLine = [string]$_.CommandLine
+            $_.ProcessId -ne $PID -and
+            -not [string]::IsNullOrWhiteSpace($commandLine) -and
+            $commandLine -match "PrintAnywhereAgent" -and
+            (
+                $commandLine -match "run-agent\.ps1" -or
+                $commandLine -match "dist[\\/]+index\.js" -or
+                $commandLine -match "node-win-x64[\\/]+node\.exe" -or
+                $commandLine.StartsWith($installRoot, [System.StringComparison]::OrdinalIgnoreCase)
+            )
+        } |
+        Select-Object -ExpandProperty ProcessId -Unique
+
+    foreach ($processId in (($owners + $managedRuntimeProcesses) | Select-Object -Unique)) {
         if ($processId -eq $PID) {
             continue
         }
 
         Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
+    }
+
+    for ($attempt = 0; $attempt -lt 10; $attempt += 1) {
+        $listener = Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue |
+            Where-Object { $_.OwningProcess -gt 0 -and $_.State -eq "Listen" } |
+            Select-Object -First 1
+        if (-not $listener) {
+            return
+        }
+        Start-Sleep -Milliseconds 500
     }
 }
 
