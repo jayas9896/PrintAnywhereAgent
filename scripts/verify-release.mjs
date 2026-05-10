@@ -82,6 +82,11 @@ const textChecks = [
     mustInclude: ['"/reset"', 'repair inherited Windows ACLs', 'Stop-ExistingTrayControllers'],
     mustNotInclude: ['$icaclsArgs += "/T"'],
   },
+  {
+    file: 'docs/windows-setup.md',
+    mustInclude: ['Quiet update setup starts the refreshed background agent and tray through the registered Windows Scheduled Tasks'],
+    mustNotInclude: [],
+  },
 ]
 
 for (const check of textChecks) {

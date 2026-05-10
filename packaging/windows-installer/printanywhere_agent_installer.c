@@ -229,6 +229,12 @@ static void launch_powershell_script(
   ShellExecuteW(NULL, L"open", L"powershell.exe", args, bundle_dir, SW_HIDE);
 }
 
+static void run_scheduled_task(const wchar_t *task_name, const wchar_t *working_dir) {
+  wchar_t command[BUFFER_CHARS];
+  swprintf(command, BUFFER_CHARS, L"schtasks.exe /Run /TN \"%ls\"", task_name);
+  run_and_wait(command, working_dir);
+}
+
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, int show_command) {
   (void)instance;
   (void)previous;
@@ -335,8 +341,13 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
   }
 
   if (start_now == IDYES) {
-    launch_powershell_script(start_script, bundle_dir, data_dir, 1);
-    launch_powershell_script(tray_script, bundle_dir, data_dir, 0);
+    if (quiet) {
+      run_scheduled_task(L"PrintAnywhereAgent", install_root);
+      run_scheduled_task(L"PrintAnywhereAgent Tray", install_root);
+    } else {
+      launch_powershell_script(start_script, bundle_dir, data_dir, 1);
+      launch_powershell_script(tray_script, bundle_dir, data_dir, 0);
+    }
     Sleep(1500);
   }
 
