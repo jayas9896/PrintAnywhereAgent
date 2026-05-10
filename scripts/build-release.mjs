@@ -137,7 +137,7 @@ await writeText(
 )
 await writeText(
   path.join(bundleDir, 'update-agent.cmd'),
-  '@echo off\r\npowershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0scripts\\check-update.ps1" -Install %*\r\n',
+  '@echo off\r\npowershell -NoProfile -STA -ExecutionPolicy Bypass -File "%~dp0scripts\\check-update.ps1" -Install %*\r\n',
 )
 await writeText(
   path.join(bundleDir, 'uninstall-agent.cmd'),

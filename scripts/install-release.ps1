@@ -262,11 +262,11 @@ if ($CreateShortcuts) {
         -Description "Stop the local Dhruvanta PrintAnywhere Agent."
     New-AgentShortcut `
         -ShortcutPath (Join-Path $startMenuDir "Check for PrintAnywhere Agent Updates.lnk") `
-        -Arguments "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$updateScript`"" `
+        -Arguments "-NoProfile -STA -ExecutionPolicy Bypass -File `"$updateScript`"" `
         -Description "Check for Dhruvanta PrintAnywhere Agent updates."
     New-AgentShortcut `
         -ShortcutPath (Join-Path $startMenuDir "Install Latest PrintAnywhere Agent Update.lnk") `
-        -Arguments "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$updateScript`" -Install" `
+        -Arguments "-NoProfile -STA -ExecutionPolicy Bypass -File `"$updateScript`" -Install" `
         -Description "Download and install the latest Dhruvanta PrintAnywhere Agent release."
     New-AgentShortcut `
         -ShortcutPath (Join-Path $startMenuDir "Uninstall PrintAnywhere Agent.lnk") `

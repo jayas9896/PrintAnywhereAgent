@@ -20,6 +20,69 @@ $script:LogBox = $null
 $script:ProgressBar = $null
 $script:InstallButton = $null
 $script:CloseButton = $null
+$script:ForegroundTimer = $null
+
+function Hide-ConsoleWindow {
+    if ($Console) {
+        return
+    }
+
+    try {
+        Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class PrintAnywhereUpdaterWindow {
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr GetConsoleWindow();
+
+    [DllImport("user32.dll")]
+    public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+}
+"@ -ErrorAction SilentlyContinue
+
+        $handle = [PrintAnywhereUpdaterWindow]::GetConsoleWindow()
+        if ($handle -ne [IntPtr]::Zero) {
+            [PrintAnywhereUpdaterWindow]::ShowWindow($handle, 0) | Out-Null
+        }
+    } catch {
+        # The updater form is the important UI; continue even if console hiding fails.
+    }
+}
+
+function Bring-UpdateWindowToFront {
+    if ($Console -or -not $script:UpdateForm) {
+        return
+    }
+
+    $script:UpdateForm.WindowState = [System.Windows.Forms.FormWindowState]::Normal
+    $script:UpdateForm.ShowInTaskbar = $true
+    $script:UpdateForm.TopMost = $true
+    $script:UpdateForm.BringToFront()
+    $script:UpdateForm.Activate()
+    $script:UpdateForm.Refresh()
+    [System.Windows.Forms.Application]::DoEvents()
+
+    if ($script:ForegroundTimer) {
+        $script:ForegroundTimer.Stop()
+        $script:ForegroundTimer.Dispose()
+    }
+
+    $timer = New-Object System.Windows.Forms.Timer
+    $timer.Interval = 1800
+    $timer.Add_Tick({
+        $script:ForegroundTimer.Stop()
+        $script:ForegroundTimer.Dispose()
+        $script:ForegroundTimer = $null
+        if ($script:UpdateForm -and -not $script:UpdateForm.IsDisposed) {
+            $script:UpdateForm.TopMost = $false
+        }
+    })
+    $script:ForegroundTimer = $timer
+    $timer.Start()
+}
+
+Hide-ConsoleWindow
 
 function Initialize-UpdateWindow {
     if ($Console) {
@@ -35,6 +98,7 @@ function Initialize-UpdateWindow {
     $form.FormBorderStyle = "FixedDialog"
     $form.MaximizeBox = $false
     $form.MinimizeBox = $true
+    $form.ShowInTaskbar = $true
     $form.Width = 600
     $form.Height = 430
     $form.BackColor = [System.Drawing.Color]::FromArgb(245, 247, 251)
@@ -450,6 +514,8 @@ if ($Console) {
 Initialize-UpdateWindow
 $autoInstall = [bool]$Install
 $script:UpdateForm.Add_Shown({
+    Bring-UpdateWindowToFront
+    Write-UpdateStep "Update window opened. This window will show checking, download, verification, and install status."
     Invoke-UpdateWorkflow -AutoInstall $autoInstall
 })
 [void]$script:UpdateForm.ShowDialog()

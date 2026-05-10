@@ -56,4 +56,38 @@ if (missing.length > 0) {
   process.exit(1)
 }
 
+const textChecks = [
+  {
+    file: 'update-agent.cmd',
+    mustInclude: ['scripts\\check-update.ps1" -Install', '-STA'],
+    mustNotInclude: ['-WindowStyle Hidden'],
+  },
+  {
+    file: 'scripts/agent-tray.ps1',
+    mustInclude: ['Invoke-AgentScript -ScriptName "check-update.ps1" -ExtraArguments @() -VisibleWindow'],
+    mustNotInclude: [],
+  },
+  {
+    file: 'scripts/check-update.ps1',
+    mustInclude: ['Download and install', 'Bring-UpdateWindowToFront', 'Update window opened.'],
+    mustNotInclude: [],
+  },
+]
+
+for (const check of textChecks) {
+  const contents = await fs.readFile(path.join(bundleDir, check.file), 'utf8')
+  for (const needle of check.mustInclude) {
+    if (!contents.includes(needle)) {
+      console.error(`Release bundle ${artifactName} ${check.file} is missing required text: ${needle}`)
+      process.exit(1)
+    }
+  }
+  for (const needle of check.mustNotInclude) {
+    if (contents.includes(needle)) {
+      console.error(`Release bundle ${artifactName} ${check.file} still includes forbidden text: ${needle}`)
+      process.exit(1)
+    }
+  }
+}
+
 console.log(`Release bundle ${artifactName} looks complete.`)

@@ -12,20 +12,35 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
 function Invoke-AgentScript {
+    [CmdletBinding()]
     param(
         [string]$ScriptName,
-        [string[]]$ExtraArguments = @()
+        [string[]]$ExtraArguments = @(),
+        [switch]$VisibleWindow
     )
 
     $scriptPath = Join-Path $PSScriptRoot $ScriptName
     $arguments = @(
         "-NoProfile",
+        "-STA",
         "-ExecutionPolicy", "Bypass",
-        "-WindowStyle", "Hidden",
         "-File", "`"$scriptPath`""
     ) + $ExtraArguments
 
-    Start-Process -FilePath "powershell.exe" -ArgumentList $arguments -WorkingDirectory $repoRoot -WindowStyle Hidden
+    $windowStyle = "Hidden"
+    if ($VisibleWindow) {
+        $windowStyle = "Normal"
+    } else {
+        $arguments = @(
+            "-NoProfile",
+            "-STA",
+            "-ExecutionPolicy", "Bypass",
+            "-WindowStyle", "Hidden",
+            "-File", "`"$scriptPath`""
+        ) + $ExtraArguments
+    }
+
+    Start-Process -FilePath "powershell.exe" -ArgumentList $arguments -WorkingDirectory $repoRoot -WindowStyle $windowStyle
 }
 
 function Show-Balloon {
@@ -90,13 +105,13 @@ $menu.Items.Add("-") | Out-Null
 $checkUpdateItem = $menu.Items.Add("Check for Updates...")
 $checkUpdateItem.Add_Click({
     Show-Balloon "PrintAnywhere Agent" "Opening the update window."
-    Invoke-AgentScript "check-update.ps1" @()
+    Invoke-AgentScript -ScriptName "check-update.ps1" -ExtraArguments @() -VisibleWindow
 })
 
 $installUpdateItem = $menu.Items.Add("Install Latest Update...")
 $installUpdateItem.Add_Click({
     Show-Balloon "PrintAnywhere Agent" "Opening the update window and starting the latest installer."
-    Invoke-AgentScript "check-update.ps1" @("-Install")
+    Invoke-AgentScript -ScriptName "check-update.ps1" -ExtraArguments @("-Install") -VisibleWindow
 })
 
 $menu.Items.Add("-") | Out-Null
