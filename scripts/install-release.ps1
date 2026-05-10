@@ -184,6 +184,22 @@ function Stop-ExistingTrayControllers {
     }
 }
 
+function Stop-ExistingAgentRuntime {
+    param([int]$Port)
+
+    $owners = Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue |
+        Where-Object { $_.OwningProcess -gt 0 -and $_.State -eq "Listen" } |
+        Select-Object -ExpandProperty OwningProcess -Unique
+
+    foreach ($processId in $owners) {
+        if ($processId -eq $PID) {
+            continue
+        }
+
+        Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
+    }
+}
+
 $nodeCommand = Resolve-NodeCommand
 
 if (-not (Test-Path "$repoRoot/dist/index.js")) {
@@ -201,6 +217,10 @@ if ([string]::IsNullOrWhiteSpace($DataDir)) {
 if ($Port -le 0) {
     $Port = 43100
 }
+
+Stop-ExistingTrayControllers
+Stop-ExistingAgentRuntime -Port $Port
+Write-Host "Stopped any existing PrintAnywhere Agent runtime and tray controller for this Windows user."
 
 $configDir = Join-Path $repoRoot "config"
 $envExamplePath = Join-Path $configDir "agent.env.example"

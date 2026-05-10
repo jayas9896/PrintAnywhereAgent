@@ -25,7 +25,7 @@ The `.exe` installer and current release bundle include a Windows Node runtime. 
 
 ## Preferred Install: Release Bundle
 
-If someone handed you `printanywhere-agent-v<version>-setup.exe`, run that installer first. It extracts the release bundle into your per-user local app data folder, runs the bundle installer, creates Dhruvanta-branded shortcuts, registers hidden startup at Windows sign-in, starts the tray controller, and can open the local agent UI when it finishes.
+If someone handed you `printanywhere-agent-v<version>-setup.exe`, run that installer first. It extracts the release bundle into your per-user local app data folder, stops any older PrintAnywhere Agent listener and tray controller for this Windows user, runs the bundle installer, creates Dhruvanta-branded shortcuts, registers hidden startup at Windows sign-in, starts one refreshed tray controller, and can open the local agent UI when it finishes.
 
 For public customer installs, the Windows security prompt should show
 Dhruvanta Systems as the verified publisher. If it shows `Unknown
@@ -58,6 +58,7 @@ That installer:
 
 - checks that the bundled Windows Node runtime or system Node.js is available
 - verifies the prebuilt runtime files are present
+- stops any older PrintAnywhere Agent listener on the local UI port and closes older tray controllers
 - creates the local data directory
 - copies `config\agent.env` from the example file if needed
 - optionally registers a Windows Scheduled Task

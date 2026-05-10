@@ -79,7 +79,7 @@ const textChecks = [
   },
   {
     file: 'scripts/install-release.ps1',
-    mustInclude: ['"/reset"', 'repair inherited Windows ACLs', 'Stop-ExistingTrayControllers'],
+    mustInclude: ['"/reset"', 'repair inherited Windows ACLs', 'Stop-ExistingTrayControllers', 'Stop-ExistingAgentRuntime'],
     mustNotInclude: ['$icaclsArgs += "/T"'],
   },
   {
