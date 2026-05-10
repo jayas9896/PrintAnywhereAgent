@@ -145,6 +145,33 @@ function formatLocationSnapshot(location?: AgentLocationSnapshot | null) {
   return `${location.latitude}, ${location.longitude}${accuracy} · ${humanizeEnum(location.source)} · ${formatTimestamp(location.capturedAt)}`
 }
 
+function parseBrowserLocationBody(body: Record<string, unknown>) {
+  const latitude = parseOptionalFormNumber(body.latitude)
+  const longitude = parseOptionalFormNumber(body.longitude)
+  if (latitude == null && longitude == null) {
+    return null
+  }
+  if (latitude == null || longitude == null) {
+    throw new Error('Browser location must include both latitude and longitude.')
+  }
+
+  return {
+    latitude,
+    longitude,
+    accuracyMeters: parseOptionalFormNumber(body.accuracyMeters),
+    capturedAt: String(body.capturedAt ?? '').trim() || null,
+  }
+}
+
+function parseOptionalFormNumber(value: unknown) {
+  const raw = String(value ?? '').trim()
+  if (!raw) {
+    return null
+  }
+  const parsed = Number(raw)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
 function redirectWithStatus(response: Response, type: 'notice' | 'error', message: string) {
   const url = new URL('http://local/')
   url.searchParams.set(type, message)
@@ -572,8 +599,13 @@ export async function startUiServer(runtime: AgentRuntime) {
 
     <div class="panel">
       <h2>Backend configuration</h2>
-      <form method="post" action="/configure" class="stack">
+      <form method="post" action="/configure" class="stack" id="configure-form">
         ${hiddenUiToken(snapshot.uiToken)}
+        <input type="hidden" name="latitude" id="configure-location-latitude" />
+        <input type="hidden" name="longitude" id="configure-location-longitude" />
+        <input type="hidden" name="accuracyMeters" id="configure-location-accuracy" />
+        <input type="hidden" name="capturedAt" id="configure-location-captured-at" />
+        <input type="hidden" id="configure-location-attempted" value="false" />
         <label>
           <div class="muted">PrintAnywhere server URL</div>
           <input type="url" name="serverUrl" value="${htmlEscape(configuredServerUrl)}" placeholder="${htmlEscape(defaultPrintAnywhereBackendUrl())}" required />
@@ -590,6 +622,7 @@ export async function startUiServer(runtime: AgentRuntime) {
         </label>
         ${isRegistered ? `<div class="muted">This machine is already registered. Saving updates local settings and sends the latest address/location on the next heartbeat; it does not create another machine.</div>` : ''}
         <button type="submit">${isRegistered ? 'Save settings' : 'Save and register'}</button>
+        <span class="muted" id="configure-location-status"></span>
       </form>
     </div>
 
@@ -823,25 +856,59 @@ export async function startUiServer(runtime: AgentRuntime) {
     </div>
     <script>
       (function () {
+        function writeLocationFields(prefix, position) {
+          document.getElementById(prefix + '-latitude').value = String(position.coords.latitude);
+          document.getElementById(prefix + '-longitude').value = String(position.coords.longitude);
+          document.getElementById(prefix + '-accuracy').value = String(position.coords.accuracy || '');
+          document.getElementById(prefix + '-captured-at').value = new Date(position.timestamp || Date.now()).toISOString();
+        }
+
+        function requestBrowserLocation(status, onDone, onUnavailable) {
+          if (!navigator.geolocation) {
+            if (status) status.textContent = 'Browser geolocation is not available.';
+            if (onUnavailable) onUnavailable();
+            return;
+          }
+          if (status) status.textContent = 'Requesting location permission...';
+          navigator.geolocation.getCurrentPosition(function (position) {
+            onDone(position);
+          }, function (error) {
+            if (status) status.textContent = error && error.message ? error.message : 'Location permission was not granted.';
+            if (onUnavailable) onUnavailable();
+          }, { enableHighAccuracy: true, timeout: 12000, maximumAge: 300000 });
+        }
+
+        var configureForm = document.getElementById('configure-form');
+        var configureStatus = document.getElementById('configure-location-status');
+        var configureAttempted = document.getElementById('configure-location-attempted');
+        if (configureForm && configureAttempted) {
+          configureForm.addEventListener('submit', function (event) {
+            if (configureAttempted.value === 'true' || document.getElementById('configure-location-latitude').value) {
+              return;
+            }
+            event.preventDefault();
+            configureAttempted.value = 'true';
+            if (configureStatus) configureStatus.textContent = 'Saving settings and requesting device location...';
+            requestBrowserLocation(configureStatus, function (position) {
+              writeLocationFields('configure-location', position);
+              if (configureStatus) configureStatus.textContent = 'Location captured. Saving settings...';
+              configureForm.submit();
+            }, function () {
+              if (configureStatus) configureStatus.textContent = 'Saving settings without device location.';
+              configureForm.submit();
+            });
+          });
+        }
+
         var button = document.getElementById('host-location-button');
         var status = document.getElementById('host-location-status');
         var form = document.getElementById('host-location-form');
         if (!button || !status || !form) return;
         button.addEventListener('click', function () {
-          if (!navigator.geolocation) {
-            status.textContent = 'Browser geolocation is not available.';
-            return;
-          }
-          status.textContent = 'Requesting location permission...';
-          navigator.geolocation.getCurrentPosition(function (position) {
-            document.getElementById('host-location-latitude').value = String(position.coords.latitude);
-            document.getElementById('host-location-longitude').value = String(position.coords.longitude);
-            document.getElementById('host-location-accuracy').value = String(position.coords.accuracy || '');
-            document.getElementById('host-location-captured-at').value = new Date(position.timestamp || Date.now()).toISOString();
+          requestBrowserLocation(status, function (position) {
+            writeLocationFields('host-location', position);
             form.submit();
-          }, function (error) {
-            status.textContent = error && error.message ? error.message : 'Location permission was not granted.';
-          }, { enableHighAccuracy: true, timeout: 12000, maximumAge: 300000 });
+          });
         });
       })();
     </script>
@@ -857,6 +924,10 @@ export async function startUiServer(runtime: AgentRuntime) {
         String(request.body.displayName ?? ''),
         String(request.body.reportedBusinessAddress ?? ''),
       )
+      const location = parseBrowserLocationBody(request.body as Record<string, unknown>)
+      if (location) {
+        await runtime.setBrowserLocation(location)
+      }
       redirectWithStatus(response, 'notice', 'Backend configuration saved. Existing registrations are updated by heartbeat without creating another machine.')
     } catch (error) {
       redirectWithStatus(response, 'error', friendlyConfigureError(error))
