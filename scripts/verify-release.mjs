@@ -103,6 +103,15 @@ const textChecks = [
     mustNotInclude: ['$icaclsArgs += "/T"'],
   },
   {
+    file: 'scripts/start-agent-background.ps1',
+    mustInclude: [
+      'Stop-StaleAgentRuntimeForPort',
+      'Test-CurrentRepoRuntime',
+      'printanywhere-agent-v',
+    ],
+    mustNotInclude: [],
+  },
+  {
     file: 'scripts/stop-agent.ps1',
     mustInclude: [
       'managed install path',

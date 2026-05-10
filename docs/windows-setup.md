@@ -25,7 +25,7 @@ The `.exe` installer and current release bundle include a Windows Node runtime. 
 
 ## Preferred Install: Release Bundle
 
-If someone handed you `printanywhere-agent-v<version>-setup.exe`, run that installer first. It extracts the release bundle into your per-user local app data folder, stops any older managed PrintAnywhere Agent process by local UI port and by managed install path, closes older tray controllers for this Windows user, runs the bundle installer, creates Dhruvanta-branded shortcuts, registers hidden startup at Windows sign-in, removes older managed program folders while keeping local data, starts one refreshed tray controller, and can open the local agent UI when it finishes.
+If someone handed you `printanywhere-agent-v<version>-setup.exe`, run that installer first. It extracts the release bundle into your per-user local app data folder, stops any older managed PrintAnywhere Agent process by local UI port and by managed install path, closes older tray controllers for this Windows user, runs the bundle installer, creates Dhruvanta-branded shortcuts, registers hidden startup at Windows sign-in, removes older managed program folders while keeping local data, starts one refreshed tray controller, and can open the local agent UI when it finishes. The background launcher also self-repairs stale installs: if an older PrintAnywhere runtime still owns the local UI port, the latest installed bundle stops that stale process and starts itself.
 
 For public customer installs, the Windows security prompt should show
 Dhruvanta Systems as the verified publisher. If it shows `Unknown
@@ -59,6 +59,7 @@ That installer:
 - checks that the bundled Windows Node runtime or system Node.js is available
 - verifies the prebuilt runtime files are present
 - stops any older PrintAnywhere Agent listener on the local UI port, stops older managed runtime processes by install path, and closes older tray controllers
+- replaces a stale older PrintAnywhere runtime if the latest shortcut sees the local UI port already occupied
 - creates the local data directory
 - copies `config\agent.env` from the example file if needed
 - optionally registers a Windows Scheduled Task
