@@ -88,6 +88,7 @@ export class AgentRuntime {
       this.state.hostLocation = location
       this.state.lastError = null
       await this.store.save(this.state)
+      await this.heartbeatTick()
       return location
     } catch (error) {
       this.state.lastError = error instanceof Error ? error.message : 'Host location detection failed'
@@ -108,6 +109,7 @@ export class AgentRuntime {
     })
     this.state.lastError = null
     await this.store.save(this.state)
+    await this.heartbeatTick()
     return this.state.hostLocation
   }
 
