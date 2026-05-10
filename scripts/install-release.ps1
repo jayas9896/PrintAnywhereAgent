@@ -118,6 +118,51 @@ function Test-ManagedPerUserInstall {
     return $RepoRoot.StartsWith($expectedRoot, [System.StringComparison]::OrdinalIgnoreCase)
 }
 
+function Normalize-PathForComparison {
+    param([string]$Path)
+
+    return ([System.IO.Path]::GetFullPath($Path)).TrimEnd(
+        [char[]]@([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    )
+}
+
+function Remove-OlderManagedVersions {
+    param([string]$RepoRoot)
+
+    if (-not (Test-ManagedPerUserInstall -RepoRoot $RepoRoot)) {
+        return
+    }
+
+    $installRoot = Split-Path -Parent $RepoRoot
+    $currentRoot = Normalize-PathForComparison -Path $RepoRoot
+    $removedCount = 0
+
+    Get-ChildItem -Path $installRoot -Directory -Filter "printanywhere-agent-v*" -ErrorAction SilentlyContinue |
+        Where-Object { (Normalize-PathForComparison -Path $_.FullName) -ne $currentRoot } |
+        ForEach-Object {
+            try {
+                Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction Stop
+                $removedCount += 1
+            } catch {
+                Write-Warning "Could not remove older PrintAnywhere Agent version folder '$($_.FullName)': $($_.Exception.Message)"
+            }
+        }
+
+    Get-ChildItem -Path $installRoot -File -Filter "printanywhere-agent-v*.zip" -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            try {
+                Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop
+                $removedCount += 1
+            } catch {
+                Write-Warning "Could not remove older PrintAnywhere Agent bundle '$($_.FullName)': $($_.Exception.Message)"
+            }
+        }
+
+    if ($removedCount -gt 0) {
+        Write-Host "Removed $removedCount older managed PrintAnywhere Agent install artifact(s)."
+    }
+}
+
 function Protect-AgentPath {
     param(
         [string]$Path,
@@ -242,6 +287,7 @@ if (Test-ManagedPerUserInstall -RepoRoot $repoRoot) {
     Protect-AgentPath -Path $DataDir -Recursive
     Protect-AgentPath -Path $configDir -Recursive
     Write-Host "Hardened agent install, config, and data ACLs for this Windows user, SYSTEM, and Administrators."
+    Remove-OlderManagedVersions -RepoRoot $repoRoot
 }
 
 if ($RegisterStartupTask) {

@@ -79,7 +79,14 @@ const textChecks = [
   },
   {
     file: 'scripts/install-release.ps1',
-    mustInclude: ['"/reset"', 'repair inherited Windows ACLs', 'Stop-ExistingTrayControllers', 'Stop-ExistingAgentRuntime'],
+    mustInclude: [
+      '"/reset"',
+      'repair inherited Windows ACLs',
+      'Stop-ExistingTrayControllers',
+      'Stop-ExistingAgentRuntime',
+      'Remove-OlderManagedVersions',
+      'older managed PrintAnywhere Agent install artifact',
+    ],
     mustNotInclude: ['$icaclsArgs += "/T"'],
   },
   {
