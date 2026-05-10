@@ -129,7 +129,7 @@ function Protect-AgentPath {
     }
 
     $currentUserSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-    $icaclsArgs = @(
+    $directoryAclArgs = @(
         $Path,
         "/inheritance:r",
         "/grant:r",
@@ -143,13 +143,24 @@ function Protect-AgentPath {
         "/C"
     )
 
-    if ($Recursive) {
-        $icaclsArgs += "/T"
-    }
-
-    & icacls @icaclsArgs | Out-Null
+    & icacls @directoryAclArgs | Out-Null
     if ($LASTEXITCODE -ne 0) {
         throw "Could not harden Windows ACLs for $Path."
+    }
+
+    if (-not $Recursive -or -not (Test-Path $Path -PathType Container)) {
+        return
+    }
+
+    $children = @(Get-ChildItem -Force -LiteralPath $Path -ErrorAction SilentlyContinue)
+    if ($children.Count -eq 0) {
+        return
+    }
+
+    $childPattern = Join-Path $Path "*"
+    & icacls $childPattern "/reset" "/T" "/C" | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not repair inherited Windows ACLs under $Path."
     }
 }
 

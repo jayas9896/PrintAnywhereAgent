@@ -72,6 +72,11 @@ const textChecks = [
     mustInclude: ['Download and install', 'Bring-UpdateWindowToFront', 'Update window opened.'],
     mustNotInclude: [],
   },
+  {
+    file: 'scripts/install-release.ps1',
+    mustInclude: ['"/reset"', 'repair inherited Windows ACLs'],
+    mustNotInclude: ['$icaclsArgs += "/T"'],
+  },
 ]
 
 for (const check of textChecks) {
