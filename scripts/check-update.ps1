@@ -367,6 +367,30 @@ function Invoke-SetupExecutable {
     }
 }
 
+function Start-InstalledAgentTasks {
+    $taskNames = @("PrintAnywhereAgent", "PrintAnywhereAgent Tray")
+    foreach ($taskName in $taskNames) {
+        try {
+            if (Get-Command Start-ScheduledTask -ErrorAction SilentlyContinue) {
+                Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
+            } else {
+                $process = Start-Process `
+                    -FilePath "schtasks.exe" `
+                    -ArgumentList @("/Run", "/TN", "`"$taskName`"") `
+                    -WindowStyle Hidden `
+                    -PassThru `
+                    -Wait
+                if ($process.ExitCode -ne 0) {
+                    throw "schtasks.exe exited with code $($process.ExitCode)"
+                }
+            }
+            Write-UpdateStep "Started refreshed scheduled task: $taskName."
+        } catch {
+            Write-UpdateStep "Could not start scheduled task '$taskName': $($_.Exception.Message)"
+        }
+    }
+}
+
 function Get-LatestReleaseInfo {
     $apiUrl = "https://api.github.com/repos/$Repo/releases/latest"
 
@@ -500,7 +524,11 @@ function Install-LatestRelease {
     Stop-AgentTrayProcesses
 
     Write-UpdateStep "Installing $($script:Release.tag_name). This window will update when setup finishes..."
-    Invoke-SetupExecutable -Path $downloadPath -Arguments "/quiet"
+    Invoke-SetupExecutable -Path $downloadPath -Arguments "/quiet /nolaunch"
+
+    Write-UpdateStep "Starting the refreshed background agent and tray controller..."
+    Stop-AgentTrayProcesses
+    Start-InstalledAgentTasks
 
     Write-UpdateStep "Update installed: $($script:Release.tag_name). The agent will continue running in the background and at Windows sign-in."
 }

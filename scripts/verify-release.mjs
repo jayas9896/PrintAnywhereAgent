@@ -69,12 +69,24 @@ const textChecks = [
   },
   {
     file: 'scripts/agent-tray.ps1',
-    mustInclude: ['Invoke-AgentScript -ScriptName "check-update.ps1" -ExtraArguments @() -VisibleWindow'],
+    mustInclude: [
+      'Invoke-AgentScript -ScriptName "check-update.ps1" -ExtraArguments @() -VisibleWindow',
+      'DhruvantaPrintAnywhereAgentTray',
+      'Stop-ExistingTrayControllers',
+    ],
     mustNotInclude: [],
   },
   {
     file: 'scripts/check-update.ps1',
-    mustInclude: ['Download and install', 'Bring-UpdateWindowToFront', 'Update window opened.', 'Invoke-SetupExecutable', 'Stop-AgentTrayProcesses'],
+    mustInclude: [
+      'Download and install',
+      'Bring-UpdateWindowToFront',
+      'Update window opened.',
+      'Invoke-SetupExecutable',
+      'Stop-AgentTrayProcesses',
+      'Start-InstalledAgentTasks',
+      '/quiet /nolaunch',
+    ],
     mustNotInclude: ['Start-Process -FilePath $downloadPath -ArgumentList "/quiet" -Wait'],
   },
   {
@@ -91,7 +103,7 @@ const textChecks = [
   },
   {
     file: 'docs/windows-setup.md',
-    mustInclude: ['Quiet update setup starts the refreshed background agent and tray through the registered Windows Scheduled Tasks'],
+    mustInclude: ['After setup exits, the updater starts the refreshed background agent and tray through the registered Windows Scheduled Tasks'],
     mustNotInclude: [],
   },
 ]

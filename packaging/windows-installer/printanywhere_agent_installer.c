@@ -211,6 +211,15 @@ static int has_quiet_flag(const wchar_t *command_line) {
     wcsstr(command_line, L"--silent");
 }
 
+static int has_no_launch_flag(const wchar_t *command_line) {
+  if (!command_line) {
+    return 0;
+  }
+  return wcsstr(command_line, L"/nolaunch") ||
+    wcsstr(command_line, L"--no-launch") ||
+    wcsstr(command_line, L"--nolaunch");
+}
+
 static void launch_powershell_script(
   const wchar_t *script_path,
   const wchar_t *bundle_dir,
@@ -241,6 +250,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
   (void)show_command;
 
   int quiet = has_quiet_flag(command_line);
+  int no_launch = has_no_launch_flag(command_line);
 
   wchar_t local_app_data[BUFFER_CHARS];
   DWORD env_length = GetEnvironmentVariableW(L"LOCALAPPDATA", local_app_data, BUFFER_CHARS);
@@ -340,7 +350,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
     );
   }
 
-  if (start_now == IDYES) {
+  if (start_now == IDYES && !no_launch) {
     if (quiet) {
       run_scheduled_task(L"PrintAnywhereAgent", install_root);
       run_scheduled_task(L"PrintAnywhereAgent Tray", install_root);

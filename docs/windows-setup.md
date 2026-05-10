@@ -180,8 +180,9 @@ Print packets are downloaded encrypted. The current implementation writes the de
 - `Check for Updates` opens a Dhruvanta update window. If a newer release exists, click `Download and install` in that window.
 - `Install Latest Update` opens the same window and starts the download/install flow immediately.
 - The window shows each step: checking GitHub, downloading the setup executable with progress, downloading checksums, verifying SHA-256, stopping the background agent and old tray controller, and running setup.
-- The updater waits only for the setup executable to exit, not for the new background agent or tray processes it launches.
-- Quiet update setup starts the refreshed background agent and tray through the registered Windows Scheduled Tasks, so older updater windows do not keep waiting on long-running child processes.
+- During update, setup installs the refreshed bundle first and does not launch the agent directly.
+- After setup exits, the updater starts the refreshed background agent and tray through the registered Windows Scheduled Tasks. That keeps the progress window tied only to installer completion, not to long-running agent or tray child processes.
+- The tray controller enforces a single running tray icon per Windows user and closes older managed tray controllers during startup.
 - If the installed version is already current, `Check for Updates` shows a `Reinstall latest` option for support-directed repair installs.
 
 ### How do I uninstall the agent?

@@ -11,6 +11,48 @@ $iconPath = Join-Path $repoRoot "assets\dhruvanta-agent.ico"
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
+$script:TrayMutex = $null
+
+function Stop-ExistingTrayControllers {
+    $installRoot = Join-Path $env:LOCALAPPDATA "Dhruvanta Systems\PrintAnywhereAgent"
+    $currentPid = $PID
+    $trayProcesses = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object {
+            $commandLine = [string]$_.CommandLine
+            $_.ProcessId -ne $currentPid -and
+            -not [string]::IsNullOrWhiteSpace($commandLine) -and
+            $commandLine -match "agent-tray\.ps1" -and
+            (
+                $commandLine -match "PrintAnywhereAgent" -or
+                $commandLine.StartsWith($installRoot, [System.StringComparison]::OrdinalIgnoreCase)
+            )
+        }
+
+    foreach ($process in $trayProcesses) {
+        Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+
+    if ($trayProcesses) {
+        Start-Sleep -Milliseconds 400
+    }
+}
+
+function Enter-TraySingleInstance {
+    $createdNew = $false
+    $script:TrayMutex = [System.Threading.Mutex]::new(
+        $true,
+        "Local\DhruvantaPrintAnywhereAgentTray",
+        [ref]$createdNew
+    )
+
+    if (-not $createdNew) {
+        exit 0
+    }
+}
+
+Stop-ExistingTrayControllers
+Enter-TraySingleInstance
+
 function Invoke-AgentScript {
     [CmdletBinding()]
     param(
@@ -132,4 +174,15 @@ $exitItem.Add_Click({
 $notifyIcon.ContextMenuStrip = $menu
 $notifyIcon.Add_DoubleClick({ Start-Process "http://127.0.0.1:$Port" })
 
-[System.Windows.Forms.Application]::Run()
+try {
+    [System.Windows.Forms.Application]::Run()
+} finally {
+    if ($notifyIcon) {
+        $notifyIcon.Visible = $false
+        $notifyIcon.Dispose()
+    }
+    if ($script:TrayMutex) {
+        $script:TrayMutex.ReleaseMutex()
+        $script:TrayMutex.Dispose()
+    }
+}
