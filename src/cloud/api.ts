@@ -124,6 +124,11 @@ export type PlatformPrinterUpsertPayload = Omit<
   reportedLocationCapturedAt?: string | null
 }
 
+function apiError(response: Response, body: string): Error {
+  const safe = body.slice(0, 120).replace(/[\r\n]+/g, ' ').trim()
+  return new Error(`HTTP ${response.status}: ${safe || response.statusText}`)
+}
+
 export class CloudApiClient {
   constructor(private readonly serverUrl: string) {}
 
@@ -140,7 +145,7 @@ export class CloudApiClient {
       body: JSON.stringify(payload),
     })
     if (!response.ok) {
-      throw new Error(await response.text())
+      throw apiError(response, await response.text())
     }
     return registerResponseSchema.parse(await response.json())
   }
@@ -155,7 +160,7 @@ export class CloudApiClient {
       body: JSON.stringify({ printers }),
     })
     if (!response.ok) {
-      throw new Error(await response.text())
+      throw apiError(response, await response.text())
     }
     return response.json()
   }
@@ -170,7 +175,7 @@ export class CloudApiClient {
       headers: { authorization: `Bearer ${agentSecret}` },
     })
     if (response.status === 204) return null
-    if (!response.ok) throw new Error(await response.text())
+    if (!response.ok) throw apiError(response, await response.text())
     return pollResponseSchema.parse(await response.json())
   }
 
@@ -180,7 +185,7 @@ export class CloudApiClient {
     const response = await fetch(url, {
       headers: { authorization: `Bearer ${agentSecret}` },
     })
-    if (!response.ok) throw new Error(await response.text())
+    if (!response.ok) throw apiError(response, await response.text())
     const ciphertext = Buffer.from(await response.arrayBuffer())
     return {
       ciphertext,
@@ -209,7 +214,7 @@ export class CloudApiClient {
       body: JSON.stringify(payload),
     })
     if (!response.ok) {
-      throw new Error(await response.text())
+      throw apiError(response, await response.text())
     }
     return response.json()
   }
@@ -242,7 +247,7 @@ export class CloudApiClient {
       },
       body: JSON.stringify(payload),
     })
-    if (!response.ok) throw new Error(await response.text())
+    if (!response.ok) throw apiError(response, await response.text())
     return response.json()
   }
 
@@ -251,7 +256,7 @@ export class CloudApiClient {
       method: 'POST',
       headers: { authorization: `Bearer ${agentSecret}` },
     })
-    if (!response.ok) throw new Error(await response.text())
+    if (!response.ok) throw apiError(response, await response.text())
     return z
       .object({
         pairingCode: z.string(),
@@ -264,7 +269,7 @@ export class CloudApiClient {
     const response = await fetch(`${this.serverUrl}/api/agent/profile`, {
       headers: { authorization: `Bearer ${agentSecret}` },
     })
-    if (!response.ok) throw new Error(await response.text())
+    if (!response.ok) throw apiError(response, await response.text())
     return agentProfileSchema.parse(await response.json())
   }
 
@@ -272,7 +277,7 @@ export class CloudApiClient {
     const response = await fetch(`${this.serverUrl}/api/agent/platform-printers`, {
       headers: { authorization: `Bearer ${agentSecret}` },
     })
-    if (!response.ok) throw new Error(await response.text())
+    if (!response.ok) throw apiError(response, await response.text())
     return z.array(platformPrinterSchema).parse(await response.json())
   }
 
@@ -285,7 +290,7 @@ export class CloudApiClient {
       },
       body: JSON.stringify(this.serializePlatformPrinterPayload(payload)),
     })
-    if (!response.ok) throw new Error(await response.text())
+    if (!response.ok) throw apiError(response, await response.text())
     return platformPrinterSchema.parse(await response.json())
   }
 
@@ -298,7 +303,7 @@ export class CloudApiClient {
       },
       body: JSON.stringify(this.serializePlatformPrinterPayload(payload)),
     })
-    if (!response.ok) throw new Error(await response.text())
+    if (!response.ok) throw apiError(response, await response.text())
     return platformPrinterSchema.parse(await response.json())
   }
 
@@ -307,7 +312,7 @@ export class CloudApiClient {
       method: 'DELETE',
       headers: { authorization: `Bearer ${agentSecret}` },
     })
-    if (!response.ok) throw new Error(await response.text())
+    if (!response.ok) throw apiError(response, await response.text())
     return platformPrinterSchema.parse(await response.json())
   }
 

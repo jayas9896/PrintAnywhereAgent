@@ -531,6 +531,16 @@ function approvalTone(status: AgentApprovalStatus | null | undefined) {
 
 export async function startUiServer(runtime: AgentRuntime) {
   const app = express()
+  app.use((_request, response, next) => {
+    response.setHeader('X-Frame-Options', 'DENY')
+    response.setHeader('X-Content-Type-Options', 'nosniff')
+    response.setHeader('Referrer-Policy', 'no-referrer')
+    response.setHeader(
+      'Content-Security-Policy',
+      "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; form-action 'self'",
+    )
+    next()
+  })
   app.use(express.urlencoded({ extended: false }))
 
   app.get('/', (request, response) => {

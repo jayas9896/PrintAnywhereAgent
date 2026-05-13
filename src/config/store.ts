@@ -28,6 +28,9 @@ export class AgentStore {
   }
 
   async tempFilePath(jobId: string) {
+    if (!/^[a-zA-Z0-9_-]+$/.test(jobId)) {
+      throw new Error(`Invalid jobId format: ${jobId}`)
+    }
     const dir = path.join(this.dataDir, 'tmp')
     await fs.mkdir(dir, { recursive: true })
     return path.join(dir, `${jobId}.pdf`)
