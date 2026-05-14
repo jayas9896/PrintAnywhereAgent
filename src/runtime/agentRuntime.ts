@@ -19,6 +19,7 @@ import { deriveMachineKey, getMachineId, isWindows } from '../core/machine.js'
 import { CloudApiClient } from '../cloud/api.js'
 import { detectHostLocation, normalizeLocationSnapshot } from '../platform/location.js'
 import { discoverPrinters, printPdf } from '../platform/printers.js'
+import { prependCoverPage } from '../core/coverPage.js'
 
 export class AgentRuntime {
   private state: AgentState = { sharedPrinters: {}, printers: [] }
@@ -401,7 +402,13 @@ export class AgentRuntime {
         printerStatusAfterJob: 'READY',
       })
       const aesKey = unwrapJobKey(job.encryptedJobKey, this.requirePrivateKeyPem())
-      const pdfBuffer = decryptJobPdf(download.ciphertext, aesKey, download.ivBase64, download.tagBase64)
+      let pdfBuffer: Buffer = decryptJobPdf(download.ciphertext, aesKey, download.ivBase64, download.tagBase64)
+      if (this.state.brandName) {
+        pdfBuffer = await prependCoverPage(pdfBuffer, {
+          businessName: this.state.brandName,
+          logoUrl: this.state.brandLogoUrl,
+        })
+      }
       const simulatePrint =
         process.env.PRINTANYWHERE_AGENT_SIMULATE_PRINT === 'true' ||
         (!isWindows() && process.env.PRINTANYWHERE_AGENT_SIMULATE_PRINT !== 'false')

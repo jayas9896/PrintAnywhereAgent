@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "express": "^5.1.0",
+    "pdf-lib": "^1.17.1",
     "pdf-to-printer": "^5.6.0",
     "zod": "^4.1.12"
   },
