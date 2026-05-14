@@ -11,7 +11,7 @@ import type {
   PlatformScalingMode,
   PlatformSidesMode,
 } from '../config/types.js'
-import { defaultPrintAnywhereBackendUrl } from '../config/defaults.js'
+import { AGENT_VERSION, defaultPrintAnywhereBackendUrl } from '../config/defaults.js'
 import type { AgentRuntime, PlatformPrinterUpsertInput } from '../runtime/agentRuntime.js'
 
 const COLOR_MODE_OPTIONS: PlatformColorMode[] = ['MONOCHROME', 'COLOR']
@@ -542,6 +542,20 @@ export async function startUiServer(runtime: AgentRuntime) {
     next()
   })
   app.use(express.urlencoded({ extended: false }))
+
+  app.get('/health', (_request, response) => {
+    const snapshot = runtime.snapshot()
+    response.json({
+      status: 'UP',
+      version: AGENT_VERSION,
+      registered: !!snapshot.registration?.agentId,
+      agentStatus: snapshot.registration?.status ?? null,
+      completedToday: snapshot.stats?.completedJobsToday ?? 0,
+      failedToday: snapshot.stats?.failedJobsToday ?? 0,
+      activeJobs: snapshot.stats?.activeJobCount ?? 0,
+      lastError: snapshot.lastError ?? null,
+    })
+  })
 
   app.get('/', (request, response) => {
     const snapshot = runtime.snapshot()

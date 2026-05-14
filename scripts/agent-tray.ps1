@@ -53,6 +53,46 @@ function Enter-TraySingleInstance {
 Stop-ExistingTrayControllers
 Enter-TraySingleInstance
 
+$script:RestartAttempts = @()
+
+function Test-AgentHealth {
+    try {
+        $response = Invoke-RestMethod -UseBasicParsing `
+            -Uri "http://127.0.0.1:$Port/health" `
+            -TimeoutSec 5 `
+            -ErrorAction Stop
+        return $response
+    } catch {
+        return $null
+    }
+}
+
+function Get-CircuitBreakerOpen {
+    $windowStart = (Get-Date).AddMinutes(-10)
+    $script:RestartAttempts = @($script:RestartAttempts | Where-Object { $_ -gt $windowStart })
+    return $script:RestartAttempts.Count -ge 3
+}
+
+function Update-TrayStatus {
+    $health = Test-AgentHealth
+    if ($null -ne $health) {
+        $registered = if ($health.registered) { "Registered" } else { "Unregistered" }
+        $raw = "PrintAnywhere Agent — Active · $registered"
+        $notifyIcon.Text = if ($raw.Length -gt 63) { $raw.Substring(0, 63) } else { $raw }
+        $statusItem.Text = "Status: Active · $registered"
+        $errorItem.Visible = $false
+    } else {
+        $notifyIcon.Text = "PrintAnywhere Agent — Not responding"
+        $statusItem.Text = "Status: Not responding"
+        $errorItem.Text = "Last error: Agent not responding"
+        $errorItem.Visible = $true
+        if (-not (Get-CircuitBreakerOpen)) {
+            $script:RestartAttempts += Get-Date
+            Invoke-AgentScript "start-agent-background.ps1" @("-DataDir", "`"$DataDir`"", "-Port", "$Port", "-EnvFile", "`"$EnvFile`"")
+        }
+    }
+}
+
 function Invoke-AgentScript {
     [CmdletBinding()]
     param(
@@ -124,6 +164,15 @@ $notifyIcon.Visible = $true
 
 $menu = New-Object System.Windows.Forms.ContextMenuStrip
 
+$statusItem = $menu.Items.Add("Status: Starting...")
+$statusItem.Enabled = $false
+
+$errorItem = $menu.Items.Add("Last error: None")
+$errorItem.Enabled = $false
+$errorItem.Visible = $false
+
+$menu.Items.Add("-") | Out-Null
+
 $openItem = $menu.Items.Add("Open PrintAnywhere Agent")
 $openItem.Add_Click({ Start-Process "http://127.0.0.1:$Port" })
 
@@ -174,9 +223,20 @@ $exitItem.Add_Click({
 $notifyIcon.ContextMenuStrip = $menu
 $notifyIcon.Add_DoubleClick({ Start-Process "http://127.0.0.1:$Port" })
 
+$healthTimer = New-Object System.Windows.Forms.Timer
+$healthTimer.Interval = 30000
+$healthTimer.add_Tick({ Update-TrayStatus })
+$healthTimer.Start()
+
+Update-TrayStatus
+
 try {
     [System.Windows.Forms.Application]::Run()
 } finally {
+    if ($healthTimer) {
+        $healthTimer.Stop()
+        $healthTimer.Dispose()
+    }
     if ($notifyIcon) {
         $notifyIcon.Visible = $false
         $notifyIcon.Dispose()

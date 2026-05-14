@@ -27,6 +27,8 @@ export class AgentRuntime {
   private running = false
   private heartbeatTimer?: NodeJS.Timeout
   private pollPromise?: Promise<void>
+  private pollBackoffMs = 5_000
+  private lastHeartbeatMs = 0
 
   constructor(private readonly store: AgentStore) {}
 
@@ -337,6 +339,7 @@ export class AgentRuntime {
         status: response.agentStatus,
       }
       this.state.lastError = null
+      this.lastHeartbeatMs = Date.now()
       await this.store.save(this.state)
       await this.refreshCloudState()
     } catch (error) {
@@ -355,10 +358,19 @@ export class AgentRuntime {
         await sleep(5000)
         continue
       }
+      // Watchdog: if heartbeat interval has been silent for >3 min, kick it manually.
+      if (this.lastHeartbeatMs > 0 && Date.now() - this.lastHeartbeatMs > 180_000) {
+        void this.heartbeatTick()
+      }
       try {
         const client = this.requireClient()
         const sharedPrinterNames = this.state.printers.filter((printer) => printer.shared).map((printer) => printer.localPrinterName)
-        const job = await client.poll(this.requireAgentSecret(), sharedPrinterNames, 30)
+        const job = await withTimeout(
+          45_000,
+          client.poll(this.requireAgentSecret(), sharedPrinterNames, 30),
+          'Poll',
+        )
+        this.pollBackoffMs = 5_000
         if (!job) {
           continue
         }
@@ -366,7 +378,8 @@ export class AgentRuntime {
       } catch (error) {
         this.state.lastError = error instanceof Error ? error.message : 'Polling failed'
         await this.store.save(this.state)
-        await sleep(5000)
+        await sleep(this.pollBackoffMs)
+        this.pollBackoffMs = Math.min(this.pollBackoffMs * 2, 60_000)
       }
     }
   }
@@ -559,6 +572,14 @@ export interface PlatformPrinterUpsertInput {
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function withTimeout<T>(ms: number, promise: Promise<T>, label: string): Promise<T> {
+  let timer: NodeJS.Timeout
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
+  })
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
 }
 
 function normalizeServerUrl(raw: string) {

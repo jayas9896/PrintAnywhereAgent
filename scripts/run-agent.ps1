@@ -92,12 +92,26 @@ if (-not (Test-Path $DataDir)) {
     New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
 }
 
+$LogDir = Join-Path $DataDir "logs"
+if (-not (Test-Path $LogDir)) {
+    New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+}
+
+# Rotate: keep last 7 daily log files
+Get-ChildItem -Path $LogDir -Filter "agent-*.log" -ErrorAction SilentlyContinue |
+    Sort-Object Name -Descending |
+    Select-Object -Skip 7 |
+    Remove-Item -Force -ErrorAction SilentlyContinue
+
+$LogFile = Join-Path $LogDir "agent-$(Get-Date -Format 'yyyy-MM-dd').log"
+
 $env:PRINTANYWHERE_AGENT_DATA_DIR = $DataDir
 $env:PRINTANYWHERE_AGENT_PORT = [string]$Port
 
 Write-Host "Starting PrintAnywhere Agent"
 Write-Host "Repo: $repoRoot"
 Write-Host "Data directory: $DataDir"
+Write-Host "Log file: $LogFile"
 Write-Host "UI: http://127.0.0.1:$Port"
 if (-not [string]::IsNullOrWhiteSpace($EnvFile)) {
     Write-Host "Environment file: $EnvFile"
@@ -106,4 +120,5 @@ if (-not [string]::IsNullOrWhiteSpace($EnvFile)) {
 $nodeCommand = Resolve-NodeCommand
 Write-Host "Node runtime: $nodeCommand"
 
-& $nodeCommand "$repoRoot/dist/index.js"
+$ErrorActionPreference = "Continue"
+& $nodeCommand "$repoRoot/dist/index.js" *>&1 | Tee-Object -FilePath $LogFile -Append
