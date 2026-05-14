@@ -46,6 +46,7 @@ export interface StoredIdentity {
 export interface AgentRegistrationState {
   agentId: string
   encryptedAgentSecret: string
+  encryptedSigningSecret?: string | null
   pairingCode?: string | null
   pairingCodeExpiresAt?: string | null
   status?: string | null

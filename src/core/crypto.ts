@@ -52,3 +52,26 @@ export function decryptJobPdf(
   decipher.setAuthTag(Buffer.from(tagBase64, 'base64'))
   return Buffer.concat([decipher.update(ciphertext), decipher.final()])
 }
+
+/**
+ * Signs a request for the X-Agent-Signature header.
+ * Input covers timestamp, HTTP method, and path so replayed requests are rejected
+ * by the backend's 5-minute clock-skew window even if the bearer token is captured.
+ */
+export function signRequest(
+  timestampMs: number,
+  method: string,
+  path: string,
+  signingSecretHex: string,
+): string {
+  const signingInput = `${timestampMs}\n${method.toUpperCase()}\n${path}`
+  const key = Buffer.from(signingSecretHex, 'hex')
+  return crypto.createHmac('sha256', key).update(signingInput, 'utf8').digest('hex')
+}
+
+/** SHA-256 hash of a file's bytes — reported in heartbeat for binary integrity auditing. */
+export function hashFile(filePath: string): string {
+  const fs = require('node:fs') as typeof import('node:fs')
+  const data = fs.readFileSync(filePath)
+  return crypto.createHash('sha256').update(data).digest('hex')
+}

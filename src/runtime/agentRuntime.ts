@@ -14,7 +14,7 @@ import type {
 } from '../config/types.js'
 import { AgentStore } from '../config/store.js'
 import { AGENT_VERSION, defaultPrintAnywhereBackendUrl } from '../config/defaults.js'
-import { decryptJobPdf, decryptString, encryptString, generateRsaIdentity, unwrapJobKey } from '../core/crypto.js'
+import { decryptJobPdf, decryptString, encryptString, generateRsaIdentity, hashFile, unwrapJobKey } from '../core/crypto.js'
 import { deriveMachineKey, getMachineId, isWindows } from '../core/machine.js'
 import { CloudApiClient } from '../cloud/api.js'
 import { detectHostLocation, normalizeLocationSnapshot } from '../platform/location.js'
@@ -250,7 +250,17 @@ export class AgentRuntime {
 
   private requireClient() {
     if (!this.state.serverUrl) throw new Error('Server URL is not configured')
-    return new CloudApiClient(this.state.serverUrl)
+    return new CloudApiClient(this.state.serverUrl, () => this.resolveSigningSecret())
+  }
+
+  private resolveSigningSecret(): string | null {
+    const reg = this.state.registration
+    if (!reg?.encryptedSigningSecret) return null
+    try {
+      return decryptString(reg.encryptedSigningSecret, this.machineKey)
+    } catch {
+      return null
+    }
   }
 
   private async registerIfNeeded(force = false) {
@@ -268,6 +278,9 @@ export class AgentRuntime {
     this.state.registration = {
       agentId: response.agentId,
       encryptedAgentSecret: encryptString(response.agentSecret, this.machineKey),
+      encryptedSigningSecret: response.signingSecret
+        ? encryptString(response.signingSecret, this.machineKey)
+        : null,
       pairingCode: response.pairingCode,
       pairingCodeExpiresAt: response.pairingCodeExpiresAt,
       status: response.status,
@@ -321,6 +334,7 @@ export class AgentRuntime {
       const printerStatuses = Object.fromEntries(this.state.printers.map((printer) => [printer.localPrinterName, printer.status]))
       const stats = this.state.stats ?? defaultStats()
       const hostLocation = this.state.hostLocation ?? null
+      const binaryHash = computeBinaryHash()
       const response = await client.heartbeat(this.requireAgentSecret(), {
         agentVersion: AGENT_VERSION,
         displayName: this.state.displayName ?? null,
@@ -332,6 +346,7 @@ export class AgentRuntime {
         memoryUsageMb: Math.round(process.memoryUsage().rss / 1024 / 1024),
         diskFreeGb: 0,
         reportedBusinessAddress: this.state.reportedBusinessAddress ?? null,
+        binaryHash,
         ...platformLocationPayload(hostLocation),
       })
       this.state.lastHeartbeatAt = response.serverTime
@@ -657,5 +672,14 @@ function platformLocationPayload(location: AgentLocationSnapshot | null) {
     reportedLocationAccuracyMeters: location.accuracyMeters ?? null,
     reportedLocationSource: location.source,
     reportedLocationCapturedAt: location.capturedAt,
+  }
+}
+
+function computeBinaryHash(): string | null {
+  try {
+    // Hash the main entry point so the backend can audit binary integrity.
+    return hashFile(process.argv[1])
+  } catch {
+    return null
   }
 }
