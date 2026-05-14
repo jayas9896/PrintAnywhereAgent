@@ -124,6 +124,60 @@ export type PlatformPrinterUpsertPayload = Omit<
   reportedLocationCapturedAt?: string | null
 }
 
+const agentOrderSchema = z.object({
+  jobId: z.string(),
+  printJobId: z.string(),
+  printerId: z.string(),
+  printerName: z.string(),
+  localPrinterName: z.string(),
+  status: z.string(),
+  pickupCode: z.string().nullish(),
+  displayName: z.string().nullish(),
+  pageCount: z.number(),
+  failureReason: z.string().nullish(),
+  queuedAt: z.string().nullish(),
+  completedAt: z.string().nullish(),
+  collectedAt: z.string().nullish(),
+  failedAt: z.string().nullish(),
+})
+
+export type AgentOrder = z.infer<typeof agentOrderSchema>
+
+const agentCouponSchema = z.object({
+  couponId: z.string(),
+  code: z.string(),
+  name: z.string().nullish(),
+  discountType: z.string(),
+  discountValue: z.number(),
+  active: z.boolean(),
+  startsAt: z.string().nullish(),
+  expiresAt: z.string().nullish(),
+  maxUses: z.number().nullish(),
+  maxUsesPerUser: z.number().nullish(),
+  usedCount: z.number(),
+  couponScope: z.string(),
+  agentRegistrationId: z.string().nullish(),
+  printerId: z.string().nullish(),
+  createdAt: z.string().nullish(),
+  updatedAt: z.string().nullish(),
+})
+
+export type AgentCoupon = z.infer<typeof agentCouponSchema>
+
+export interface AgentCouponUpsertPayload {
+  code: string
+  name?: string | null
+  discountType: string
+  discountValue: number
+  active: boolean
+  startsAt?: string | null
+  expiresAt?: string | null
+  maxUses?: number | null
+  maxUsesPerUser?: number | null
+  couponScope: 'AGENT' | 'PRINTER'
+  printerId?: string | null
+}
+
 function apiError(response: Response, body: string): Error {
   const safe = body.slice(0, 120).replace(/[\r\n]+/g, ' ').trim()
   return new Error(`HTTP ${response.status}: ${safe || response.statusText}`)
@@ -314,6 +368,52 @@ export class CloudApiClient {
     })
     if (!response.ok) throw apiError(response, await response.text())
     return platformPrinterSchema.parse(await response.json())
+  }
+
+  async listOrders(agentSecret: string): Promise<AgentOrder[]> {
+    const response = await fetch(`${this.serverUrl}/api/agent/orders`, {
+      headers: { authorization: `Bearer ${agentSecret}` },
+    })
+    if (!response.ok) throw apiError(response, await response.text())
+    return z.array(agentOrderSchema).parse(await response.json())
+  }
+
+  async listCoupons(agentSecret: string): Promise<AgentCoupon[]> {
+    const response = await fetch(`${this.serverUrl}/api/agent/coupons`, {
+      headers: { authorization: `Bearer ${agentSecret}` },
+    })
+    if (!response.ok) throw apiError(response, await response.text())
+    return z.array(agentCouponSchema).parse(await response.json())
+  }
+
+  async createCoupon(agentSecret: string, payload: AgentCouponUpsertPayload): Promise<AgentCoupon> {
+    const response = await fetch(`${this.serverUrl}/api/agent/coupons`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${agentSecret}`, 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    if (!response.ok) throw apiError(response, await response.text())
+    return agentCouponSchema.parse(await response.json())
+  }
+
+  async updateCoupon(agentSecret: string, couponId: string, payload: AgentCouponUpsertPayload): Promise<AgentCoupon> {
+    const response = await fetch(`${this.serverUrl}/api/agent/coupons/${couponId}`, {
+      method: 'PUT',
+      headers: { authorization: `Bearer ${agentSecret}`, 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    if (!response.ok) throw apiError(response, await response.text())
+    return agentCouponSchema.parse(await response.json())
+  }
+
+  async setCouponActive(agentSecret: string, couponId: string, active: boolean): Promise<AgentCoupon> {
+    const response = await fetch(`${this.serverUrl}/api/agent/coupons/${couponId}/active`, {
+      method: 'PATCH',
+      headers: { authorization: `Bearer ${agentSecret}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ active }),
+    })
+    if (!response.ok) throw apiError(response, await response.text())
+    return agentCouponSchema.parse(await response.json())
   }
 
   private serializePlatformPrinterPayload(payload: PlatformPrinterUpsertPayload) {

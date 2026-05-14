@@ -170,6 +170,12 @@ export interface AgentState {
   profile?: AgentProfile | null
   platformPrinters?: PlatformPrinter[]
   hostLocation?: AgentLocationSnapshot | null
+  /** Optional white-label business name shown alongside Dhruvanta branding. */
+  brandName?: string | null
+  /** Optional URL to the business's own logo image for white-labeling. */
+  brandLogoUrl?: string | null
+  /** Support contact email shown on the Support page. */
+  supportContactEmail?: string | null
 }
 
 export interface PollJob {

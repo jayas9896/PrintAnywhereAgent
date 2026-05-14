@@ -483,6 +483,43 @@ export class AgentRuntime {
     }
   }
 
+  async listOrders() {
+    const client = this.requireClient()
+    const secret = this.requireAgentSecret()
+    return client.listOrders(secret)
+  }
+
+  async listCoupons() {
+    const client = this.requireClient()
+    const secret = this.requireAgentSecret()
+    return client.listCoupons(secret)
+  }
+
+  async createCoupon(payload: import('../cloud/api.js').AgentCouponUpsertPayload) {
+    const client = this.requireClient()
+    const secret = this.requireAgentSecret()
+    return client.createCoupon(secret, payload)
+  }
+
+  async updateCoupon(couponId: string, payload: import('../cloud/api.js').AgentCouponUpsertPayload) {
+    const client = this.requireClient()
+    const secret = this.requireAgentSecret()
+    return client.updateCoupon(secret, couponId, payload)
+  }
+
+  async setCouponActive(couponId: string, active: boolean) {
+    const client = this.requireClient()
+    const secret = this.requireAgentSecret()
+    return client.setCouponActive(secret, couponId, active)
+  }
+
+  async updateBranding(brandName: string | null, brandLogoUrl: string | null, supportContactEmail: string | null) {
+    this.state.brandName = brandName?.trim() || null
+    this.state.brandLogoUrl = brandLogoUrl?.trim() || null
+    this.state.supportContactEmail = supportContactEmail?.trim() || null
+    await this.store.save(this.state)
+  }
+
   async markCollected(jobId: string) {
     const secret = this.requireAgentSecret()
     const client = this.requireClient()
