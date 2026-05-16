@@ -2,6 +2,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import express from 'express'
 import type { Request, Response } from 'express'
+import QRCode from 'qrcode'
 import type {
   AgentApprovalStatus,
   AgentLocationSnapshot,
@@ -327,6 +328,118 @@ export function computeConnectionState(input: {
     label: 'Connection delayed',
     detail: `Last synced ${describeAge(ageSeconds)} — the cloud connection may be slow.`,
   }
+}
+
+// ---------------------------------------------------------------------------
+// First-run / pairing stage
+// ---------------------------------------------------------------------------
+
+/**
+ * Coarse first-run lifecycle stage for a print-shop owner setting up a brand
+ * new machine. Drives whether the dashboard renders the full operator console
+ * or a focused, guided pairing screen (KAN-37, UX review KAN-29 theme 2 P0-1).
+ *
+ *   config          — no cloud registration yet. The owner sees a short,
+ *                      focused config form ("tell us about your shop").
+ *   awaiting-pairing — the machine has registered and holds a pairing code,
+ *                      but the platform admin has not finished pairing it.
+ *                      The hero pairing code + QR are shown here.
+ *   paired           — the admin has approved/paired the machine. The full
+ *                      operator dashboard (Branding, Pricing, Orders, …) is
+ *                      shown.
+ */
+export type FirstRunStage = 'config' | 'awaiting-pairing' | 'paired'
+
+export interface FirstRunStatus {
+  stage: FirstRunStage
+  /** True for `config` and `awaiting-pairing` — render the guided screen. */
+  isFirstRun: boolean
+  /** The pairing code to hand the admin, when one exists. */
+  pairingCode: string | null
+  /** Raw ISO expiry of the pairing code, when one exists. */
+  pairingCodeExpiresAt: string | null
+}
+
+/**
+ * Pure, testable mapping from an agent snapshot to its first-run stage.
+ *
+ * Discriminators:
+ *  - No `registration.agentId`            → `config`.
+ *  - Has `agentId` but the admin has not   → `awaiting-pairing`. We treat the
+ *    completed pairing                       machine as paired once the cloud
+ *                                            reports `selfServiceEnabled` (the
+ *                                            first capability that flips after
+ *                                            an admin approves the machine —
+ *                                            see agentRuntime.refreshCloudState)
+ *                                            or an `APPROVED` approval status.
+ *  - A registration with a registered      → still `awaiting-pairing` so the
+ *    status but no pairing code yet           guided screen can explain that the
+ *                                            code is being generated.
+ */
+export function computeFirstRunStage(
+  snapshot: Pick<ReturnType<AgentRuntime['snapshot']>, 'registration' | 'profile'>,
+): FirstRunStatus {
+  const registration = snapshot.registration ?? null
+  const pairingCode = registration?.pairingCode?.trim() || null
+  const pairingCodeExpiresAt = registration?.pairingCodeExpiresAt ?? null
+
+  if (!registration?.agentId) {
+    return { stage: 'config', isFirstRun: true, pairingCode: null, pairingCodeExpiresAt: null }
+  }
+
+  const profile = snapshot.profile ?? null
+  const paired = !!profile && (profile.selfServiceEnabled || profile.approvalStatus === 'APPROVED')
+  if (paired) {
+    return { stage: 'paired', isFirstRun: false, pairingCode, pairingCodeExpiresAt }
+  }
+
+  return { stage: 'awaiting-pairing', isFirstRun: true, pairingCode, pairingCodeExpiresAt }
+}
+
+/** True when an ISO pairing-code expiry is in the past relative to `now`. */
+export function isPairingCodeExpired(expiresAt: string | null | undefined, now: number = Date.now()) {
+  if (!expiresAt) return false
+  const ms = Date.parse(expiresAt)
+  if (!Number.isFinite(ms)) return false
+  return ms <= now
+}
+
+// ---------------------------------------------------------------------------
+// QR code rendering
+// ---------------------------------------------------------------------------
+
+/**
+ * Render a payload as an inline, dependency-light SVG QR code.
+ *
+ * Uses the `qrcode` package (MIT) — but only its synchronous `QRCode.create`
+ * matrix API, so the SVG is assembled here and server-rendered straight into
+ * the page (no client-side JS, no async). The owner can scan it with a phone
+ * to hand the pairing code to their platform admin (KAN-37 P0-2).
+ */
+export function renderQrSvg(payload: string, opts: { size?: number; label?: string } = {}) {
+  const size = opts.size ?? 168
+  const label = opts.label ?? 'QR code'
+  let qr
+  try {
+    qr = QRCode.create(payload, { errorCorrectionLevel: 'M' })
+  } catch {
+    return ''
+  }
+  const count: number = qr.modules.size
+  const quiet = 2
+  const dim = count + quiet * 2
+  const cells: string[] = []
+  for (let row = 0; row < count; row++) {
+    for (let col = 0; col < count; col++) {
+      if (qr.modules.get(row, col)) {
+        cells.push(`M${col + quiet} ${row + quiet}h1v1h-1z`)
+      }
+    }
+  }
+  return `<svg class="pairing-qr" xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${dim} ${dim}" role="img" aria-label="${htmlEscape(label)}" shape-rendering="crispEdges">
+    <rect width="${dim}" height="${dim}" fill="#fff"></rect>
+    <path d="${cells.join('')}" fill="#142018"></path>
+  </svg>`
 }
 
 // ---------------------------------------------------------------------------

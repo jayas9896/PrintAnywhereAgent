@@ -17,9 +17,11 @@
     "release:windows-installer": "node ./scripts/build-release.mjs && node ./scripts/verify-release.mjs && node ./scripts/build-windows-installer.mjs"
   },
   "dependencies": {
+    "@types/qrcode": "^1.5.6",
     "express": "^5.1.0",
     "pdf-lib": "^1.17.1",
     "pdf-to-printer": "^5.6.0",
+    "qrcode": "^1.5.4",
     "zod": "^4.1.12"
   },
   "devDependencies": {
