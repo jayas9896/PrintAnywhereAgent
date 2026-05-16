@@ -91,12 +91,6 @@ function parseRequiredNumber(body: Record<string, unknown>, key: string) {
   return parsed
 }
 
-function parseNonNegativeInteger(body: Record<string, unknown>, key: string) {
-  const parsed = Math.round(parseRequiredNumber(body, key))
-  if (parsed < 0) throw new Error(`${humanizeKey(key)} must be zero or higher.`)
-  return parsed
-}
-
 function parseOptionalTrimmed(body: Record<string, unknown>, key: string) {
   const value = String(body[key] ?? '').trim()
   return value || null
@@ -141,6 +135,57 @@ function selected<T extends string>(actual: T | null | undefined, expected: T) {
 function formatMinor(value: number | null | undefined) {
   const amount = (value ?? 0) / 100
   return `₹${amount.toFixed(2)}`
+}
+
+// ---------------------------------------------------------------------------
+// Rupee <-> paise conversion (KAN-38 scope #2)
+// ---------------------------------------------------------------------------
+//
+// Prices are stored and sent to the cloud in paise (the minor unit; ₹1 =
+// 100 paise). A non-technical shop owner thinks in rupees, so the publish
+// form lets them enter a ₹ decimal amount and we convert on submit. These
+// helpers are the single, tested conversion contract — keep all rupee/paise
+// arithmetic here so floating-point rounding is handled in exactly one place.
+
+/**
+ * Convert a paise integer to a fixed 2-decimal rupee STRING suitable for the
+ * `value` of a `type="number" step="0.01"` input (e.g. 1550 -> "15.50").
+ * Null/undefined and non-finite inputs become "0.00".
+ */
+export function paiseToRupeeInput(paise: number | null | undefined): string {
+  const n = typeof paise === 'number' && Number.isFinite(paise) ? paise : 0
+  return (n / 100).toFixed(2)
+}
+
+/**
+ * Parse a rupee amount typed by the owner into an integer paise value.
+ *
+ * Accepts an optional leading `₹` and surrounding whitespace. Multiplies by
+ * 100 and rounds to the nearest paise — `Math.round` is essential here, as
+ * `15.10 * 100` is `1509.9999…` in IEEE-754 and would truncate to 1509.
+ *
+ * Throws a friendly Error for blank, non-numeric or negative input so the
+ * caller can surface it through the existing redirect-with-error flow.
+ */
+export function parseRupeesToPaise(raw: unknown, fieldLabel = 'Price'): number {
+  const text = String(raw ?? '').trim().replace(/^₹\s*/, '').trim()
+  if (!text) throw new Error(`${fieldLabel} is required.`)
+  const rupees = Number(text)
+  if (!Number.isFinite(rupees)) throw new Error(`${fieldLabel} must be a valid amount in rupees.`)
+  if (rupees < 0) throw new Error(`${fieldLabel} cannot be negative.`)
+  return Math.round(rupees * 100)
+}
+
+/**
+ * Like parseRupeesToPaise but for OPTIONAL fields (the Advanced sections):
+ * a blank value returns null (the rule is left unset) instead of throwing.
+ * The result is returned as a paise STRING so it slots straight into the
+ * existing string-keyed constraint `configuration` objects.
+ */
+export function parseOptionalRupeesToPaise(raw: unknown, fieldLabel = 'Price'): string | null {
+  const text = String(raw ?? '').trim()
+  if (!text) return null
+  return String(parseRupeesToPaise(text, fieldLabel))
 }
 
 function formatTimestamp(value?: string | null, fallback = 'Never') {
@@ -198,6 +243,49 @@ function findConstraint(printer: PlatformPrinter | null | undefined, type: strin
 
 function findPricingAdjustment(printer: PlatformPrinter | null | undefined, type: string) {
   return printer?.pricingAdjustments.find((adjustment) => adjustment.type === type)?.configuration ?? {}
+}
+
+/**
+ * Render a labelled rupee money field. The owner types a plain rupee amount
+ * (with a ₹ adornment); the value is converted to paise on submit via
+ * parseRupeesToPaise. `paiseValue` is the stored paise value to prefill.
+ */
+function moneyField(opts: {
+  name: string
+  label: string
+  paiseValue: number | null | undefined
+  spanClass?: string
+}) {
+  const span = opts.spanClass ? ` ${opts.spanClass}` : ''
+  return `
+    <label class="${span.trim()}">
+      <div class="label-text">${htmlEscape(opts.label)}</div>
+      <div class="money-input">
+        <input type="number" step="0.01" min="0" inputmode="decimal"
+          name="${htmlEscape(opts.name)}" value="${htmlEscape(paiseToRupeeInput(opts.paiseValue))}" />
+      </div>
+    </label>
+  `
+}
+
+/**
+ * Render an OPTIONAL rupee money field for the Advanced sections. Unlike
+ * moneyField, an empty stored value renders as an empty input (the rule is
+ * disabled) rather than "0.00". `storedPaise` is the raw paise string held
+ * in the constraint configuration, or '' / undefined when unset.
+ */
+function optionalMoneyField(opts: { name: string; label: string; storedPaise: unknown }) {
+  const raw = String(opts.storedPaise ?? '').trim()
+  const value = raw && Number.isFinite(Number(raw)) ? (Number(raw) / 100).toFixed(2) : ''
+  return `
+    <label>
+      <div class="label-text">${htmlEscape(opts.label)}</div>
+      <div class="money-input">
+        <input type="number" step="0.01" min="0" inputmode="decimal"
+          name="${htmlEscape(opts.name)}" value="${htmlEscape(value)}" placeholder="0.00" />
+      </div>
+    </label>
+  `
 }
 
 function renderCheckboxGroup<T extends string>(name: string, options: T[], selectedValues: T[]) {
@@ -616,6 +704,17 @@ const SHARED_CSS = `
   }
   input:focus, select:focus, textarea:focus { border-color: var(--brand-mid); }
   .hint { font-size: var(--text-xs); color: var(--muted); margin-top: var(--space-1); }
+
+  /* Rupee-prefixed money input — a ₹ adornment sits inside the field border
+   * so a shop owner enters a plain rupee amount (e.g. 15.50) and never sees
+   * paise. The amount is converted to paise on submit. See parseRupeesToPaise. */
+  .money-input { position: relative; }
+  .money-input::before {
+    content: '\\20B9'; position: absolute; left: var(--space-3); top: 50%;
+    transform: translateY(-50%); color: var(--muted); font-size: var(--text-base);
+    pointer-events: none;
+  }
+  .money-input input[type=number] { padding-left: 26px; }
 
   /* Accessible focus ring — applies to every interactive element that
    * receives keyboard focus. Mouse clicks do not trigger :focus-visible. */
@@ -1330,46 +1429,72 @@ const SHARED_SCRIPTS = `<script>
 // Platform printer sub-forms
 // ---------------------------------------------------------------------------
 
-function renderConstraintEditor(printer: PlatformPrinter | null | undefined) {
+/**
+ * The Advanced (collapsed) portion of the publish form (KAN-38 scope #1).
+ *
+ * Document constraints, manual-approval rules, and the usage-based ink
+ * pricing floor — including ICC profile paths and ink-coverage conversion
+ * factors — are tucked into nested `<details>` accordions. They stay
+ * collapsed by default and are pre-filled with sensible defaults so a
+ * non-technical owner can publish without ever opening them. An accordion
+ * is opened on first paint only when the printer being edited already has
+ * a value in it, so existing advanced config stays visible.
+ *
+ * The constraint builders treat empty fields as "rule disabled", so an
+ * unopened accordion always produces a valid submit.
+ */
+export function renderAdvancedPrinterSections(printer: PlatformPrinter | null | undefined) {
   const size = findConstraint(printer, 'MAX_SINGLE_PDF_SIZE')
   const pageCount = findConstraint(printer, 'MAX_SINGLE_PDF_PAGE_COUNT')
   const pageCoverage = findConstraint(printer, 'MAX_SINGLE_PDF_PAGE_COVERAGE')
   const manualApproval = findConstraint(printer, 'REQUIRE_MANUAL_APPROVAL_FOR_DENSITY_OR_PRICE_CHANGE')
   const pricingFloor = findPricingAdjustment(printer, 'INK_COVERAGE_FLOOR')
 
+  const hasValues = (obj: Record<string, unknown>) =>
+    Object.values(obj).some((value) => String(value ?? '').trim() !== '')
+  const open = (condition: boolean) => (condition ? ' open' : '')
+
+  const constraintsOpen = open(hasValues(size) || hasValues(pageCount) || hasValues(pageCoverage))
+  const manualApprovalOpen = open(hasValues(manualApproval))
+  const pricingFloorOpen = open(hasValues(pricingFloor))
+
   return `
     <div class="subsection">
-      <div class="subsection-title">Document constraints</div>
-      <div class="grid-3">
-        <label>
-          <div class="label-text">Max single PDF size (MB)</div>
-          <input type="text" name="constraintMaxSizeMb" value="${htmlEscape(size.maxSizeMb ?? '')}" placeholder="15" />
-        </label>
-        <label>
-          <div class="label-text">Max single PDF pages</div>
-          <input type="text" name="constraintMaxPageCount" value="${htmlEscape(pageCount.maxPageCount ?? '')}" placeholder="100" />
-        </label>
-        <label>
-          <div class="label-text">Max printed area per page (%)</div>
-          <input type="text" name="constraintMaxPageCoveragePercent" value="${htmlEscape(pageCoverage.maxPageCoveragePercent ?? '')}" placeholder="65" />
-        </label>
-      </div>
-      <div class="subsection">
-        <div class="subsection-title">Manual approval for dense or repriced PDFs</div>
-        <p class="muted small">Leave all fields empty to disable this rule.</p>
+      <div class="subsection-title">Advanced settings</div>
+      <p class="muted small" style="margin-bottom:10px;">
+        Optional. These are pre-filled with sensible defaults — you can publish
+        without opening them. Open a section only if you need to fine-tune it.
+      </p>
+
+      <details${constraintsOpen}>
+        <summary><span class="summary-row"><span>Document limits</span></span></summary>
+        <p class="muted small">Caps on the files customers can send. Leave blank for no limit.</p>
+        <div class="grid-3" style="margin-top:10px;">
+          <label>
+            <div class="label-text">Max PDF size (MB)</div>
+            <input type="text" name="constraintMaxSizeMb" value="${htmlEscape(size.maxSizeMb ?? '')}" placeholder="15" />
+          </label>
+          <label>
+            <div class="label-text">Max PDF pages</div>
+            <input type="text" name="constraintMaxPageCount" value="${htmlEscape(pageCount.maxPageCount ?? '')}" placeholder="100" />
+          </label>
+          <label>
+            <div class="label-text">Max printed area per page (%)</div>
+            <input type="text" name="constraintMaxPageCoveragePercent" value="${htmlEscape(pageCoverage.maxPageCoveragePercent ?? '')}" placeholder="65" />
+          </label>
+        </div>
+      </details>
+
+      <details${manualApprovalOpen}>
+        <summary><span class="summary-row"><span>Manual approval for dense or repriced PDFs</span></span></summary>
+        <p class="muted small">Hold heavy-ink jobs for your review. Leave all fields empty to disable this rule.</p>
         <div class="grid-3" style="margin-top:10px;">
           <label>
             <div class="label-text">Coverage threshold (%)</div>
             <input type="text" name="manualApprovalMaxPageCoveragePercent" value="${htmlEscape(manualApproval.maxPageCoveragePercent ?? '')}" placeholder="65" />
           </label>
-          <label>
-            <div class="label-text">Black full-page price (paise)</div>
-            <input type="text" name="manualApprovalBlackFullPagePriceMinor" value="${htmlEscape(manualApproval.blackFullPagePriceMinor ?? '')}" placeholder="500" />
-          </label>
-          <label>
-            <div class="label-text">Color full-page price (paise)</div>
-            <input type="text" name="manualApprovalColorFullPagePriceMinor" value="${htmlEscape(manualApproval.colorFullPagePriceMinor ?? '')}" placeholder="1200" />
-          </label>
+          ${optionalMoneyField({ name: 'manualApprovalBlackFullPagePriceMinor', label: 'Black full-page price', storedPaise: manualApproval.blackFullPagePriceMinor })}
+          ${optionalMoneyField({ name: 'manualApprovalColorFullPagePriceMinor', label: 'Color full-page price', storedPaise: manualApproval.colorFullPagePriceMinor })}
           <label>
             <div class="label-text">Black conversion factor</div>
             <input type="text" name="manualApprovalBlackConversionFactor" value="${htmlEscape(manualApproval.blackConversionFactor ?? '')}" placeholder="1.00" />
@@ -1383,19 +1508,14 @@ function renderConstraintEditor(printer: PlatformPrinter | null | undefined) {
             <input type="text" name="manualApprovalIccProfilePath" value="${htmlEscape(manualApproval.iccProfilePath ?? '')}" placeholder="/opt/print-profiles/printer.icc" />
           </label>
         </div>
-      </div>
-      <div class="subsection">
-        <div class="subsection-title">Usage-based ink pricing floor</div>
-        <p class="muted small">Leave all fields empty to disable.</p>
+      </details>
+
+      <details${pricingFloorOpen}>
+        <summary><span class="summary-row"><span>Usage-based ink pricing floor</span></span></summary>
+        <p class="muted small">Charge more for heavy-ink pages. Leave all fields empty to disable.</p>
         <div class="grid-3" style="margin-top:10px;">
-          <label>
-            <div class="label-text">Black full-page price (paise)</div>
-            <input type="text" name="pricingFloorBlackFullPagePriceMinor" value="${htmlEscape(pricingFloor.blackFullPagePriceMinor ?? '')}" placeholder="500" />
-          </label>
-          <label>
-            <div class="label-text">Color full-page price (paise)</div>
-            <input type="text" name="pricingFloorColorFullPagePriceMinor" value="${htmlEscape(pricingFloor.colorFullPagePriceMinor ?? '')}" placeholder="1200" />
-          </label>
+          ${optionalMoneyField({ name: 'pricingFloorBlackFullPagePriceMinor', label: 'Black full-page price', storedPaise: pricingFloor.blackFullPagePriceMinor })}
+          ${optionalMoneyField({ name: 'pricingFloorColorFullPagePriceMinor', label: 'Color full-page price', storedPaise: pricingFloor.colorFullPagePriceMinor })}
           <label>
             <div class="label-text">Black conversion factor</div>
             <input type="text" name="pricingFloorBlackConversionFactor" value="${htmlEscape(pricingFloor.blackConversionFactor ?? '')}" placeholder="1.00" />
@@ -1409,12 +1529,12 @@ function renderConstraintEditor(printer: PlatformPrinter | null | undefined) {
             <input type="text" name="pricingFloorIccProfilePath" value="${htmlEscape(pricingFloor.iccProfilePath ?? '')}" placeholder="/opt/print-profiles/printer.icc" />
           </label>
         </div>
-      </div>
+      </details>
     </div>
   `
 }
 
-function renderPlatformPrinterForm(
+export function renderPlatformPrinterForm(
   uiToken: string | null | undefined,
   availablePrinterNames: string[],
   printer?: PlatformPrinter,
@@ -1463,32 +1583,12 @@ function renderPlatformPrinterForm(
         </label>
       </div>
       <div class="subsection">
-        <div class="subsection-title">Pricing (amounts in paise, ₹1 = 100 paise)</div>
+        <div class="subsection-title">Pricing</div>
+        <p class="muted small">Enter prices in rupees — for example, type 2.50 for ₹2.50.</p>
         <div class="grid-3" style="margin-top:10px;">
-          <label>
-            <div class="label-text">Base job price</div>
-            <input type="text" name="baseJobPriceMinor" value="${htmlEscape(String(printer?.baseJobPriceMinor ?? 0))}" />
-          </label>
-          <label>
-            <div class="label-text">Monochrome page price</div>
-            <input type="text" name="monochromePagePriceMinor" value="${htmlEscape(String(printer?.monochromePagePriceMinor ?? 0))}" />
-          </label>
-          <label>
-            <div class="label-text">Color page price</div>
-            <input type="text" name="colorPagePriceMinor" value="${htmlEscape(String(printer?.colorPagePriceMinor ?? 0))}" />
-          </label>
-          <label>
-            <div class="label-text">Duplex sheet surcharge</div>
-            <input type="text" name="duplexSheetSurchargeMinor" value="${htmlEscape(String(printer?.duplexSheetSurchargeMinor ?? 0))}" />
-          </label>
-          <label>
-            <div class="label-text">A3 page surcharge</div>
-            <input type="text" name="a3PageSurchargeMinor" value="${htmlEscape(String(printer?.a3PageSurchargeMinor ?? 0))}" />
-          </label>
-          <label>
-            <div class="label-text">Glossy paper surcharge</div>
-            <input type="text" name="glossyPaperSurchargeMinor" value="${htmlEscape(String(printer?.glossyPaperSurchargeMinor ?? 0))}" />
-          </label>
+          ${moneyField({ name: 'baseJobPriceMinor', label: 'Base price per job', paiseValue: printer?.baseJobPriceMinor })}
+          ${moneyField({ name: 'monochromePagePriceMinor', label: 'Black & white page price', paiseValue: printer?.monochromePagePriceMinor })}
+          ${moneyField({ name: 'colorPagePriceMinor', label: 'Colour page price', paiseValue: printer?.colorPagePriceMinor })}
         </div>
       </div>
       <div class="subsection">
@@ -1513,27 +1613,39 @@ function renderPlatformPrinterForm(
         </div>
       </div>
       <div class="subsection">
-        <div class="subsection-title">Secure cover packet</div>
-        <div class="grid-3" style="margin-top:10px;">
-          <label class="choice span-3">
-            <input type="checkbox" name="supportsSecureCoverSheets" ${checked(printer?.supportsSecureCoverSheets ?? false)} />
-            <span>Offer secure cover packets</span>
-          </label>
-          <label>
-            <div class="label-text">Secure cover surcharge</div>
-            <input type="text" name="secureCoverSheetPriceMinor" value="${htmlEscape(String(printer?.secureCoverSheetPriceMinor ?? 0))}" />
-          </label>
-          <label>
-            <div class="label-text">Secure cover color</div>
-            <input type="text" name="secureCoverSheetColorName" value="${htmlEscape(printer?.secureCoverSheetColorName ?? 'WHITE')}" />
-          </label>
-          <label class="span-3">
-            <div class="label-text">Secure cover label</div>
-            <input type="text" name="secureCoverSheetLabel" value="${htmlEscape(printer?.secureCoverSheetLabel ?? 'SECURE-DO-NOT-OPEN')}" />
-          </label>
-        </div>
+        <div class="subsection-title">Extra charges &amp; options</div>
+        <p class="muted small" style="margin-bottom:10px;">
+          Optional. Pre-filled with sensible defaults — open a section only to change it.
+        </p>
+        <details>
+          <summary><span class="summary-row"><span>Surcharges</span></span></summary>
+          <p class="muted small">Extra charges added on top of the page prices above.</p>
+          <div class="grid-3" style="margin-top:10px;">
+            ${moneyField({ name: 'duplexSheetSurchargeMinor', label: 'Double-sided surcharge', paiseValue: printer?.duplexSheetSurchargeMinor })}
+            ${moneyField({ name: 'a3PageSurchargeMinor', label: 'A3 page surcharge', paiseValue: printer?.a3PageSurchargeMinor })}
+            ${moneyField({ name: 'glossyPaperSurchargeMinor', label: 'Glossy paper surcharge', paiseValue: printer?.glossyPaperSurchargeMinor })}
+          </div>
+        </details>
+        <details${printer?.supportsSecureCoverSheets ? ' open' : ''}>
+          <summary><span class="summary-row"><span>Secure cover packet</span></span></summary>
+          <div class="grid-3" style="margin-top:10px;">
+            <label class="choice span-3">
+              <input type="checkbox" name="supportsSecureCoverSheets" ${checked(printer?.supportsSecureCoverSheets ?? false)} />
+              <span>Offer secure cover packets</span>
+            </label>
+            ${moneyField({ name: 'secureCoverSheetPriceMinor', label: 'Secure cover surcharge', paiseValue: printer?.secureCoverSheetPriceMinor })}
+            <label>
+              <div class="label-text">Secure cover color</div>
+              <input type="text" name="secureCoverSheetColorName" value="${htmlEscape(printer?.secureCoverSheetColorName ?? 'WHITE')}" />
+            </label>
+            <label class="span-3">
+              <div class="label-text">Secure cover label</div>
+              <input type="text" name="secureCoverSheetLabel" value="${htmlEscape(printer?.secureCoverSheetLabel ?? 'SECURE-DO-NOT-OPEN')}" />
+            </label>
+          </div>
+        </details>
       </div>
-      ${renderConstraintEditor(printer)}
+      ${renderAdvancedPrinterSections(printer)}
       <div class="btn-row">
         <button class="btn btn-primary" type="submit">${htmlEscape(submitLabel)}</button>
       </div>
@@ -1548,12 +1660,13 @@ function buildManagedPrinterPayload(body: Record<string, unknown>, printerId?: s
     agentPrinterName: parseRequiredText(body, 'agentPrinterName'),
     enabled: hasCheckbox(body, 'enabled'),
     status: parseRequiredText(body, 'status') as PlatformPrinterStatus,
-    glossyPaperSurchargeMinor: parseNonNegativeInteger(body, 'glossyPaperSurchargeMinor'),
-    baseJobPriceMinor: parseNonNegativeInteger(body, 'baseJobPriceMinor'),
-    monochromePagePriceMinor: parseNonNegativeInteger(body, 'monochromePagePriceMinor'),
-    colorPagePriceMinor: parseNonNegativeInteger(body, 'colorPagePriceMinor'),
-    duplexSheetSurchargeMinor: parseNonNegativeInteger(body, 'duplexSheetSurchargeMinor'),
-    a3PageSurchargeMinor: parseNonNegativeInteger(body, 'a3PageSurchargeMinor'),
+    // Prices are entered by the owner in rupees and converted to paise here.
+    glossyPaperSurchargeMinor: parseRupeesToPaise(body.glossyPaperSurchargeMinor, 'Glossy paper surcharge'),
+    baseJobPriceMinor: parseRupeesToPaise(body.baseJobPriceMinor, 'Base price per job'),
+    monochromePagePriceMinor: parseRupeesToPaise(body.monochromePagePriceMinor, 'Black & white page price'),
+    colorPagePriceMinor: parseRupeesToPaise(body.colorPagePriceMinor, 'Colour page price'),
+    duplexSheetSurchargeMinor: parseRupeesToPaise(body.duplexSheetSurchargeMinor, 'Double-sided surcharge'),
+    a3PageSurchargeMinor: parseRupeesToPaise(body.a3PageSurchargeMinor, 'A3 page surcharge'),
     documentConstraints: buildDocumentConstraints(body),
     pricingAdjustments: buildPricingAdjustments(body),
     supportedColorModes: asArray(body.supportedColorModes) as PlatformColorMode[],
@@ -1561,7 +1674,7 @@ function buildManagedPrinterPayload(body: Record<string, unknown>, printerId?: s
     supportedPageSizes: asArray(body.supportedPageSizes) as PlatformPageSize[],
     supportedScalingModes: asArray(body.supportedScalingModes) as PlatformScalingMode[],
     supportsSecureCoverSheets: hasCheckbox(body, 'supportsSecureCoverSheets'),
-    secureCoverSheetPriceMinor: parseNonNegativeInteger(body, 'secureCoverSheetPriceMinor'),
+    secureCoverSheetPriceMinor: parseRupeesToPaise(body.secureCoverSheetPriceMinor, 'Secure cover surcharge'),
     secureCoverSheetColorName: parseRequiredText(body, 'secureCoverSheetColorName'),
     secureCoverSheetLabel: parseRequiredText(body, 'secureCoverSheetLabel'),
   }
@@ -1576,8 +1689,8 @@ function buildDocumentConstraints(body: Record<string, unknown>): ConfiguredCons
   const maxPageCoveragePercent = parseOptionalTrimmed(body, 'constraintMaxPageCoveragePercent')
   if (maxPageCoveragePercent) constraints.push({ type: 'MAX_SINGLE_PDF_PAGE_COVERAGE', configuration: { maxPageCoveragePercent } })
   const manualApprovalCoverage = parseOptionalTrimmed(body, 'manualApprovalMaxPageCoveragePercent')
-  const manualApprovalBlackPrice = parseOptionalTrimmed(body, 'manualApprovalBlackFullPagePriceMinor')
-  const manualApprovalColorPrice = parseOptionalTrimmed(body, 'manualApprovalColorFullPagePriceMinor')
+  const manualApprovalBlackPrice = parseOptionalRupeesToPaise(body.manualApprovalBlackFullPagePriceMinor, 'Manual-approval black full-page price')
+  const manualApprovalColorPrice = parseOptionalRupeesToPaise(body.manualApprovalColorFullPagePriceMinor, 'Manual-approval colour full-page price')
   if (manualApprovalCoverage || manualApprovalBlackPrice || manualApprovalColorPrice) {
     constraints.push({
       type: 'REQUIRE_MANUAL_APPROVAL_FOR_DENSITY_OR_PRICE_CHANGE',
@@ -1595,8 +1708,8 @@ function buildDocumentConstraints(body: Record<string, unknown>): ConfiguredCons
 }
 
 function buildPricingAdjustments(body: Record<string, unknown>): ConfiguredConstraint[] {
-  const blackPrice = parseOptionalTrimmed(body, 'pricingFloorBlackFullPagePriceMinor')
-  const colorPrice = parseOptionalTrimmed(body, 'pricingFloorColorFullPagePriceMinor')
+  const blackPrice = parseOptionalRupeesToPaise(body.pricingFloorBlackFullPagePriceMinor, 'Pricing-floor black full-page price')
+  const colorPrice = parseOptionalRupeesToPaise(body.pricingFloorColorFullPagePriceMinor, 'Pricing-floor colour full-page price')
   if (!blackPrice && !colorPrice) return []
   return [{
     type: 'INK_COVERAGE_FLOOR',
