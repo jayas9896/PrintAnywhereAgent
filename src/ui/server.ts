@@ -6,6 +6,7 @@ import QRCode from 'qrcode'
 import type {
   AgentApprovalStatus,
   AgentLocationSnapshot,
+  AgentProfile,
   ConfiguredConstraint,
   PickupJobSnapshot,
   PlatformColorMode,
@@ -318,6 +319,74 @@ function statusBadge(status: string) {
   if (['FAILED', 'REJECTED', 'SUSPENDED', 'OFFLINE'].includes(s)) return 'badge badge-bad'
   if (['QUEUED', 'DOWNLOADING', 'DECRYPTING', 'PRINTING', 'DISPATCHING'].includes(s)) return 'badge badge-info'
   return 'badge'
+}
+
+// ---------------------------------------------------------------------------
+// Lifecycle / approval banners (KAN-40 scope #3 — UX review KAN-29 P1-8)
+// ---------------------------------------------------------------------------
+//
+// Approval state used to be communicated by a single small badge in the
+// Registration card — a SUSPENDED or REJECTED machine looked almost the same
+// as an approved one. selectLifecycleBanner maps the cloud-reported approval
+// status to a prominent, plain-language banner with "what this means / what
+// to do now" guidance, so a non-technical owner is never left guessing why
+// jobs stopped arriving.
+//
+// Note on REVOKED: the recovery docs talk about a "revoked" machine, but the
+// agent data model only carries REJECTED (see AgentApprovalStatus). We treat
+// REJECTED as that strongest "this machine can no longer take orders" state
+// and use the docs' revoked-recovery wording for it.
+
+export interface LifecycleBanner {
+  variant: 'info' | 'warning' | 'error'
+  title: string
+  body: string
+}
+
+/**
+ * Pure, testable mapping from an agent profile's approval status to the
+ * prominent lifecycle banner the dashboard should show — or `null` when the
+ * machine is fully approved (APPROVED) and no standing notice is needed.
+ *
+ * A missing profile is treated as PENDING_REVIEW: the machine has registered
+ * but the cloud has not yet returned an approval decision.
+ */
+export function selectLifecycleBanner(
+  profile: Pick<AgentProfile, 'approvalStatus'> | null | undefined,
+): LifecycleBanner | null {
+  const status = profile?.approvalStatus ?? 'PENDING_REVIEW'
+  switch (status) {
+    case 'APPROVED':
+      return null
+    case 'SUSPENDED':
+      return {
+        variant: 'warning',
+        title: 'This machine is paused by PrintAnywhere',
+        body:
+          'Customer print jobs are not being sent to this PC right now, and you cannot ' +
+          'change your printers until it is un-paused. This is usually temporary. ' +
+          'Please contact your PrintAnywhere admin to find out why and get it un-paused.',
+      }
+    case 'REJECTED':
+      return {
+        variant: 'error',
+        title: 'This machine is no longer connected to PrintAnywhere',
+        body:
+          'PrintAnywhere has removed this PC from your shop, so it cannot take customer ' +
+          'orders. Please stop using it for printing and contact your PrintAnywhere admin. ' +
+          'You may need to set this PC up again — see Support for the reset steps.',
+      }
+    case 'PENDING_REVIEW':
+    default:
+      return {
+        variant: 'info',
+        title: 'Waiting for PrintAnywhere to approve this shop',
+        body:
+          'You can finish setting up your printers and prices now. Customers will not be ' +
+          'able to find or print to your shop until a PrintAnywhere admin approves it — ' +
+          'this is a one-time check and usually takes less than a day.',
+      }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1952,11 +2021,23 @@ export async function startUiServer(runtime: AgentRuntime) {
       return
     }
 
+    // KAN-40 P1-8: a prominent, plain-language banner for pending / suspended /
+    // revoked machines. Only shown on the paired dashboard — the first-run
+    // screen is already a focused experience and carries its own messaging.
+    const lifecycleBanner = selectLifecycleBanner(profile)
+
     const content = `
       <div>
         <div class="page-eyebrow">Agent console</div>
         <div class="page-title">Dashboard</div>
       </div>
+      ${lifecycleBanner
+        ? `<div id="lifecycle-banner">${stateBanner({
+            variant: lifecycleBanner.variant,
+            title: lifecycleBanner.title,
+            body: lifecycleBanner.body,
+          })}</div>`
+        : ''}
 
       <div class="card">
         <div class="card-title">Health &amp; status</div>
