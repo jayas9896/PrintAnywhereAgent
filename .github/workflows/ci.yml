@@ -1,0 +1,60 @@
+name: CI
+
+# KAN-49: gate every change to the PrintAnywhere Agent. Runs on PRs and
+# on pushes to the default branch. Independent of release.yml, which only
+# runs on version tags.
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Audit dependencies
+        run: npm audit --audit-level=high
+
+      - name: Typecheck and build
+        # `build` is `tsc -p tsconfig.json`, which fully typechecks the
+        # project; a successful build is the typecheck gate for this repo.
+        run: npm run build
+
+      - name: Tests with coverage
+        # Run the full node:test suite with V8 coverage on every PR so new
+        # code cannot break existing tests. --test-coverage-lines /
+        # -functions enforce a floor; measured 2026-05-16 at
+        # lines 63.8% / branches 88.6% / functions 74.0%. Thresholds sit
+        # a few points below current so CI fails on regression but is not
+        # perma-red. Raise as coverage grows.
+        run: |
+          node --import tsx --test \
+            --experimental-test-coverage \
+            --test-coverage-lines=0.58 \
+            --test-coverage-functions=0.68 \
+            --test-coverage-branches=0.80 \
+            "test/**/*.test.ts"
