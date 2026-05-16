@@ -948,7 +948,6 @@ function renderFirstRunConfigForm(
       <input type="hidden" name="longitude" id="configure-location-longitude" />
       <input type="hidden" name="accuracyMeters" id="configure-location-accuracy" />
       <input type="hidden" name="capturedAt" id="configure-location-captured-at" />
-      <input type="hidden" id="configure-location-attempted" value="true" />
       <label>
         <div class="label-text">A name for this PC</div>
         <input type="text" name="displayName" value="${htmlEscape(snapshot.displayName ?? '')}" placeholder="Counter PC - Front Desk" />
@@ -1198,25 +1197,10 @@ const SHARED_SCRIPTS = `<script>
     }, { enableHighAccuracy: true, timeout: 12000, maximumAge: 300000 });
   }
 
-  var configureForm = document.getElementById('configure-form');
-  var configureStatus = document.getElementById('configure-location-status');
-  var configureAttempted = document.getElementById('configure-location-attempted');
-  if (configureForm && configureAttempted) {
-    configureForm.addEventListener('submit', function (event) {
-      if (configureAttempted.value === 'true' || (document.getElementById('configure-location-latitude') || {}).value) return;
-      event.preventDefault();
-      configureAttempted.value = 'true';
-      if (configureStatus) configureStatus.textContent = 'Saving settings and requesting device location…';
-      requestBrowserLocation(configureStatus, function (pos) {
-        writeLocationFields('configure-location', pos);
-        if (configureStatus) configureStatus.textContent = 'Location captured. Saving…';
-        configureForm.submit();
-      }, function () {
-        if (configureStatus) configureStatus.textContent = 'Saving without device location.';
-        configureForm.submit();
-      });
-    });
-  }
+  // NOTE: the config form (#configure-form) no longer prompts for geolocation
+  // on submit. Location is shared only via an explicit button — see
+  // wireExplicitLocationButton below. This avoids a silent browser permission
+  // prompt when the owner just wants to Save settings (KAN-38, scope #4).
 
   var hostBtn = document.getElementById('host-location-button');
   var hostStatus = document.getElementById('host-location-status');
@@ -1258,24 +1242,30 @@ const SHARED_SCRIPTS = `<script>
     })(copyButtons[ci]);
   }
 
-  // --- First-run "Share device location" explicit action -----------------
-  // P1-1: never silently prompt for geolocation. The owner clicks this
-  // button to consciously share, then the form submits with the result.
-  var firstRunLocBtn = document.getElementById('firstrun-location-button');
-  var firstRunLocForm = document.getElementById('configure-form');
-  var firstRunLocStatus = document.getElementById('firstrun-location-status');
-  if (firstRunLocBtn && firstRunLocForm) {
-    firstRunLocBtn.addEventListener('click', function () {
-      firstRunLocBtn.disabled = true;
-      requestBrowserLocation(firstRunLocStatus, function (pos) {
+  // --- Explicit "Share device location" action ----------------------------
+  // P1-1 (KAN-37) + KAN-38: never silently prompt for geolocation. Both the
+  // first-run config form and the paired-state config form expose an explicit
+  // button; the owner clicks it to consciously share, then the form submits
+  // with the result. Only one config form (#configure-form) is on the page at
+  // a time, so we wire up whichever button is present.
+  function wireExplicitLocationButton(buttonId, statusId) {
+    var btn = document.getElementById(buttonId);
+    var locForm = document.getElementById('configure-form');
+    var status = document.getElementById(statusId);
+    if (!btn || !locForm) return;
+    btn.addEventListener('click', function () {
+      btn.disabled = true;
+      requestBrowserLocation(status, function (pos) {
         writeLocationFields('configure-location', pos);
-        if (firstRunLocStatus) firstRunLocStatus.textContent = 'Location captured. Saving…';
-        firstRunLocForm.submit();
+        if (status) status.textContent = 'Location captured. Saving…';
+        locForm.submit();
       }, function () {
-        firstRunLocBtn.disabled = false;
+        btn.disabled = false;
       });
     });
   }
+  wireExplicitLocationButton('firstrun-location-button', 'firstrun-location-status');
+  wireExplicitLocationButton('paired-location-button', 'paired-location-status');
 
   // --- Auto-refresh the awaiting-pairing screen ---------------------------
   // While the owner waits for the admin to pair, poll /health and reload
@@ -1741,7 +1731,9 @@ export async function startUiServer(runtime: AgentRuntime) {
           <input type="hidden" name="longitude" id="configure-location-longitude" />
           <input type="hidden" name="accuracyMeters" id="configure-location-accuracy" />
           <input type="hidden" name="capturedAt" id="configure-location-captured-at" />
-          <input type="hidden" id="configure-location-attempted" value="false" />
+          <!-- Save never silently prompts for geolocation. The owner shares
+               location only via the explicit button below (KAN-38, mirrors
+               the KAN-37 first-run fix). -->
           <label>
             <div class="label-text">PrintAnywhere server URL</div>
             <input type="url" name="serverUrl" value="${htmlEscape(configuredServerUrl)}" placeholder="${htmlEscape(defaultPrintAnywhereBackendUrl())}" required />
@@ -1757,10 +1749,21 @@ export async function startUiServer(runtime: AgentRuntime) {
               <input type="text" name="reportedBusinessAddress" value="${htmlEscape(snapshot.reportedBusinessAddress ?? profile?.reportedBusinessAddress ?? '')}" placeholder="Shop number, street, city, state" />
             </label>
           </div>
+          <div class="loc-explainer">
+            <div class="step-title" style="font-size:var(--text-base);">Update this shop's location (optional)</div>
+            <p class="muted small" style="margin-top:4px; line-height:1.6;">
+              Saving these settings will <strong>not</strong> ask for your location. If your shop
+              has moved or its location was never set, click below — your browser will then ask
+              for permission, and the new location is sent on the next sync.
+            </p>
+            <div class="btn-row" style="margin-top:10px;">
+              <button class="btn btn-secondary" type="button" id="paired-location-button">Share device location</button>
+              <span class="muted small" id="paired-location-status"></span>
+            </div>
+          </div>
           ${isRegistered ? `<div class="hint">This machine is already registered. Saving updates local settings and sends the latest address/location on the next heartbeat; it does not create another machine.</div>` : ''}
           <div class="btn-row">
             <button class="btn btn-primary" type="submit">${isRegistered ? 'Save settings' : 'Save and register'}</button>
-            <span class="muted small" id="configure-location-status"></span>
           </div>
         </form>
       </div>
