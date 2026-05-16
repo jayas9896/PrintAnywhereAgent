@@ -230,6 +230,106 @@ function statusBadge(status: string) {
 }
 
 // ---------------------------------------------------------------------------
+// Connection / heartbeat staleness
+// ---------------------------------------------------------------------------
+
+/**
+ * How long (ms) the agent may go without a successful heartbeat before its
+ * cloud connection is treated as stale. The runtime sends a heartbeat every
+ * 60s; the operator-facing copy already tells shop owners that a heartbeat
+ * older than 2 minutes means the connection may be lost — so 120s is the
+ * staleness threshold, sitting cleanly between the 60s interval and the
+ * runtime's 180s watchdog.
+ */
+export const HEARTBEAT_STALE_THRESHOLD_MS = 120_000
+
+export type ConnectionState = 'connected' | 'stale' | 'disconnected' | 'unregistered'
+
+export interface ConnectionStatus {
+  /** Coarse state used to pick the pill colour/icon. */
+  state: ConnectionState
+  /** Whole seconds since the last heartbeat, or null when none has occurred. */
+  ageSeconds: number | null
+  /** Short, non-technical label for the pill. */
+  label: string
+  /** Friendly "last sync" sentence for the operator. */
+  detail: string
+}
+
+/** Render a relative "x ago" phrase from a second count. */
+function describeAge(ageSeconds: number): string {
+  if (ageSeconds < 5) return 'just now'
+  if (ageSeconds < 60) return `${ageSeconds}s ago`
+  const minutes = Math.floor(ageSeconds / 60)
+  if (minutes < 60) return `${minutes} min ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours} hr ago`
+  return `${Math.floor(hours / 24)} day(s) ago`
+}
+
+/**
+ * Pure, testable mapping from raw heartbeat facts to a connection status.
+ * Used both for the server-rendered pill and (via /health) the client poll.
+ */
+export function computeConnectionState(input: {
+  registered: boolean
+  lastHeartbeatAt: string | null | undefined
+  now?: number
+  staleThresholdMs?: number
+}): ConnectionStatus {
+  const now = input.now ?? Date.now()
+  const threshold = input.staleThresholdMs ?? HEARTBEAT_STALE_THRESHOLD_MS
+
+  if (!input.registered) {
+    return {
+      state: 'unregistered',
+      ageSeconds: null,
+      label: 'Not registered',
+      detail: 'This machine is not registered with PrintAnywhere yet.',
+    }
+  }
+
+  const heartbeatMs = input.lastHeartbeatAt ? Date.parse(input.lastHeartbeatAt) : NaN
+  if (!Number.isFinite(heartbeatMs)) {
+    return {
+      state: 'disconnected',
+      ageSeconds: null,
+      label: 'Disconnected',
+      detail: 'No heartbeat received yet — waiting for the first cloud sync.',
+    }
+  }
+
+  const ageSeconds = Math.max(0, Math.round((now - heartbeatMs) / 1000))
+  const ageMs = now - heartbeatMs
+
+  if (ageMs <= threshold) {
+    return {
+      state: 'connected',
+      ageSeconds,
+      label: 'Connected',
+      detail: `Last synced ${describeAge(ageSeconds)}.`,
+    }
+  }
+
+  // Beyond 3x the threshold the connection is treated as fully down.
+  if (ageMs > threshold * 3) {
+    return {
+      state: 'disconnected',
+      ageSeconds,
+      label: 'Disconnected',
+      detail: `No cloud sync for ${describeAge(ageSeconds)}. Restart the agent if this persists.`,
+    }
+  }
+
+  return {
+    state: 'stale',
+    ageSeconds,
+    label: 'Connection delayed',
+    detail: `Last synced ${describeAge(ageSeconds)} — the cloud connection may be slow.`,
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Shared CSS
 // ---------------------------------------------------------------------------
 
@@ -930,15 +1030,23 @@ export async function startUiServer(runtime: AgentRuntime) {
   // ── Health (JSON, no page shell) ──────────────────────────────────────────
   app.get('/health', (_request, response) => {
     const snapshot = runtime.snapshot()
+    const registered = !!snapshot.registration?.agentId
+    const lastHeartbeatAt = snapshot.lastHeartbeatAt ?? null
+    const connection = computeConnectionState({ registered, lastHeartbeatAt })
     response.json({
       status: 'UP',
       version: AGENT_VERSION,
-      registered: !!snapshot.registration?.agentId,
+      registered,
       agentStatus: snapshot.registration?.status ?? null,
       completedToday: snapshot.stats?.completedJobsToday ?? 0,
       failedToday: snapshot.stats?.failedJobsToday ?? 0,
       activeJobs: snapshot.stats?.activeJobCount ?? 0,
       lastError: snapshot.lastError ?? null,
+      // Heartbeat / connection visibility — consumed by the header
+      // connection pill's client-side poll (KAN-36 theme 3, P0-3).
+      lastHeartbeatAt,
+      heartbeatStaleThresholdMs: HEARTBEAT_STALE_THRESHOLD_MS,
+      connection,
     })
   })
 
