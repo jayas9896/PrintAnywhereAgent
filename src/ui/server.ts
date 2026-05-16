@@ -609,7 +609,7 @@ const SHARED_CSS = `
  * poll in SHARED_SCRIPTS then keeps it live. The data-* attributes and
  * element IDs are the contract the polling script updates against.
  */
-function connectionPill(status: ConnectionStatus) {
+export function connectionPill(status: ConnectionStatus) {
   const syncText =
     status.state === 'unregistered'
       ? 'Pair this machine to connect'
