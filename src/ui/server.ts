@@ -348,11 +348,25 @@ const SHARED_CSS = `
   .stat-label { font-size: var(--text-xs); color: var(--muted); font-weight: var(--font-weight-medium); text-transform: uppercase; letter-spacing: .05em; margin-bottom: var(--space-2); }
   .stat-value { font-size: var(--text-2xl); font-weight: var(--font-weight-bold); color: var(--brand); line-height: var(--leading-tight); }
 
-  /* Badges */
-  .badge { display: inline-block; border-radius: 999px; background: var(--border); color: var(--muted); padding: 3px 10px; font-size: 12px; font-weight: 600; vertical-align: middle; }
-  .badge-good { background: #d8f0e3; color: #155c31; }
-  .badge-bad { background: #fde7e5; color: #8b2d22; }
-  .badge-info { background: #ddeeff; color: #1a4e8a; }
+  /* Visually-hidden — present for screen readers, removed from the visual flow. */
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+
+  /* Badges — status pills. State is conveyed by BOTH a leading shape/icon
+   * glyph and colour, so the meaning survives for colour-blind operators
+   * and on monochrome displays (accessibility P1-4). */
+  .badge { display: inline-flex; align-items: center; gap: 5px; border-radius: var(--radius-pill); background: var(--border); color: var(--muted); padding: 3px 10px; font-size: var(--text-xs); font-weight: var(--font-weight-semibold); vertical-align: middle; }
+  .badge::before { font-size: 11px; line-height: 1; }
+  .badge-good { background: var(--status-good-bg); color: var(--status-good-fg); }
+  .badge-good::before { content: '\\2714'; }   /* heavy check mark */
+  .badge-bad { background: var(--status-bad-bg); color: var(--status-bad-fg); }
+  .badge-bad::before { content: '\\2715'; }    /* multiplication x */
+  .badge-info { background: var(--status-info-bg); color: var(--status-info-fg); }
+  .badge-info::before { content: '\\25CF'; }   /* filled circle */
+  .badge-warn { background: var(--status-warn-bg); color: var(--status-warn-fg); }
+  .badge-warn::before { content: '\\26A0'; }   /* warning sign */
 
   /* Forms */
   form.stack { display: grid; gap: var(--space-3); }
@@ -397,11 +411,27 @@ const SHARED_CSS = `
   .choice { display: flex; gap: 8px; align-items: center; cursor: pointer; }
   .choice input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--brand); flex-shrink: 0; }
 
-  /* Alerts */
-  .alert { padding: 12px 16px; border-radius: var(--radius-sm); font-size: 14px; }
-  .alert-success { background: #e7f7ec; color: #155c31; border: 1px solid #c0e8ce; }
-  .alert-error { background: #fdeceb; color: #8b2d22; border: 1px solid #f7c9c4; }
-  .alert-info { background: #e8f0ff; color: #1a4080; border: 1px solid #c0d0f0; }
+  /* Alerts — transient flash messages (driven by ?notice / ?error query
+   * params). For persistent state messaging use .state-banner instead. */
+  .alert { padding: var(--space-3) var(--space-4); border-radius: var(--radius-sm); font-size: var(--text-base); }
+  .alert-success { background: var(--status-good-bg); color: var(--status-good-fg); border: 1px solid var(--status-good-border); }
+  .alert-error { background: var(--status-bad-bg); color: var(--status-bad-fg); border: 1px solid var(--status-bad-border); }
+  .alert-info { background: var(--status-info-bg); color: var(--status-info-fg); border: 1px solid var(--status-info-border); }
+
+  /* State banner — reusable persistent state primitive. Unlike .alert it is
+   * rendered conditionally to communicate a standing condition (offline,
+   * pending approval, suspended, revoked, …). Variants: info/success/
+   * warning/error. A leading icon glyph carries meaning alongside colour.
+   * Usage: stateBanner({ variant, title, body? }) — see helper below. */
+  .state-banner { display: flex; gap: var(--space-3); align-items: flex-start; padding: var(--space-3) var(--space-4); border-radius: var(--radius-sm); border: 1px solid var(--border); font-size: var(--text-base); }
+  .state-banner-icon { font-size: var(--text-md); line-height: var(--leading-tight); flex-shrink: 0; }
+  .state-banner-body { display: flex; flex-direction: column; gap: 2px; }
+  .state-banner-title { font-weight: var(--font-weight-bold); }
+  .state-banner-text { font-size: var(--text-sm); line-height: var(--leading-normal); }
+  .state-banner-info { background: var(--status-info-bg); color: var(--status-info-fg); border-color: var(--status-info-border); }
+  .state-banner-success { background: var(--status-good-bg); color: var(--status-good-fg); border-color: var(--status-good-border); }
+  .state-banner-warning { background: var(--status-warn-bg); color: var(--status-warn-fg); border-color: var(--status-warn-border); }
+  .state-banner-error { background: var(--status-bad-bg); color: var(--status-bad-fg); border-color: var(--status-bad-border); }
 
   /* Tables */
   .data-table { width: 100%; border-collapse: collapse; font-size: 14px; }
@@ -413,13 +443,17 @@ const SHARED_CSS = `
   .muted { color: var(--muted); font-size: 13px; }
   .small { font-size: 12px; }
 
-  /* Details / Accordion */
-  details { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px; }
-  details + details { margin-top: 10px; }
-  summary { cursor: pointer; font-weight: 600; list-style: none; display: flex; align-items: center; justify-content: space-between; }
-  summary::after { content: '▾'; font-size: 12px; color: var(--muted); }
-  details[open] summary::after { content: '▴'; }
-  details > *:not(summary) { margin-top: 14px; }
+  /* Details / Accordion — the native disclosure triangle is kept (display:
+   * list-item) so assistive tech announces the expanded/collapsed state.
+   * A second chevron on the right is a purely decorative affordance. */
+  details { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--space-3); }
+  details + details { margin-top: var(--space-2); }
+  summary { cursor: pointer; font-weight: var(--font-weight-semibold); display: list-item; list-style-position: outside; margin-left: 1.1em; }
+  summary::-webkit-details-marker { color: var(--muted); }
+  summary .summary-row { display: flex; align-items: center; justify-content: space-between; }
+  summary .summary-row::after { content: '\\25BE'; font-size: var(--text-xs); color: var(--muted); }
+  details[open] summary .summary-row::after { content: '\\25B4'; }
+  details > *:not(summary) { margin-top: var(--space-3); }
 
   /* Pickup code */
   .pickup-code { font-family: ui-monospace, monospace; font-size: 18px; letter-spacing: .12em; font-weight: 700; }
@@ -500,8 +534,8 @@ function pageShell(
     ${navLinks.map((link) => `<a href="${link.href}"${activePage === link.id ? ' class="active"' : ''}>${link.label}</a>`).join('')}
   </nav>
   <main class="page-content">
-    ${notice ? `<div class="alert alert-success">${htmlEscape(notice)}</div>` : ''}
-    ${error ? `<div class="alert alert-error">${htmlEscape(error)}</div>` : ''}
+    ${notice ? `<div class="alert alert-success" role="status" aria-live="polite">${htmlEscape(notice)}</div>` : ''}
+    ${error ? `<div class="alert alert-error" role="alert" aria-live="assertive">${htmlEscape(error)}</div>` : ''}
     ${content}
   </main>
   <footer class="site-footer">
@@ -1115,8 +1149,10 @@ export async function startUiServer(runtime: AgentRuntime) {
                   (printer) => `
                     <details>
                       <summary>
-                        <span>${htmlEscape(printer.name)} · <span class="muted">${htmlEscape(printer.agentPrinterName)}</span></span>
-                        <span class="${printer.enabled ? 'badge badge-good' : 'badge'}">${printer.enabled ? 'Enabled' : 'Disabled'}</span>
+                        <span class="summary-row">
+                          <span>${htmlEscape(printer.name)} · <span class="muted">${htmlEscape(printer.agentPrinterName)}</span></span>
+                          <span class="${printer.enabled ? 'badge badge-good' : 'badge'}">${printer.enabled ? 'Enabled' : 'Disabled'}</span>
+                        </span>
                       </summary>
                       <div class="muted small" style="margin-bottom:12px;">
                         Status: ${htmlEscape(humanizeEnum(printer.status))} ·
