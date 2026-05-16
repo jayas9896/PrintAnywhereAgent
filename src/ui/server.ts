@@ -857,6 +857,15 @@ const SHARED_CSS = `
   .loc-explainer { background: var(--surface-alt); border: 1px solid var(--border-light); border-radius: var(--radius-sm); padding: var(--space-4); }
   @media (max-width: 560px) { .pairing-code-big { font-size: 30px; } }
 
+  /* Empty state — a friendly placeholder shown in a table when it has no
+   * rows, or as a standalone block. Centred, with optional inline action.
+   * See tableEmptyState() / emptyState(). */
+  .empty-state { text-align: center; padding: var(--space-6) var(--space-4); color: var(--muted); }
+  .empty-state-icon { font-size: 28px; line-height: 1; margin-bottom: var(--space-2); }
+  .empty-state-title { font-weight: var(--font-weight-semibold); color: var(--text); font-size: var(--text-base); }
+  .empty-state-text { font-size: var(--text-sm); line-height: var(--leading-normal); margin-top: 4px; }
+  .empty-state-action { margin-top: var(--space-3); display: flex; justify-content: center; }
+
   /* Footer */
   .site-footer { background: var(--brand); color: rgba(255,255,255,.5); font-size: 12px; padding: 14px 24px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-shrink: 0; }
   .site-footer a { color: rgba(255,255,255,.65); text-decoration: none; }
@@ -915,6 +924,47 @@ export function stateBanner(opts: {
       ${opts.body ? `<span class="state-banner-text">${htmlEscape(opts.body)}</span>` : ''}
     </span>
   </div>`
+}
+
+/**
+ * Reusable friendly empty-state block (KAN-38 scope #3). Shown when a list or
+ * table has no rows yet, so the owner sees reassuring guidance instead of a
+ * blank void. An optional `action` HTML fragment (typically an inline form
+ * with a Refresh button) is rendered below the copy.
+ */
+export function emptyState(opts: {
+  icon?: string
+  title: string
+  text: string
+  action?: string
+}) {
+  return `<div class="empty-state">
+    <div class="empty-state-icon" aria-hidden="true">${opts.icon ?? '🖨'}</div>
+    <div class="empty-state-title">${htmlEscape(opts.title)}</div>
+    <div class="empty-state-text">${htmlEscape(opts.text)}</div>
+    ${opts.action ? `<div class="empty-state-action">${opts.action}</div>` : ''}
+  </div>`
+}
+
+/**
+ * Wrap `emptyState` in a single full-width table row so it can be dropped
+ * into a `<tbody>` that would otherwise render as a headerless void. Mirrors
+ * the colspan empty-row pattern the pickup / recent-jobs tables already use,
+ * but with the richer empty-state block and an optional inline action.
+ */
+export function tableEmptyState(opts: {
+  colspan: number
+  icon?: string
+  title: string
+  text: string
+  action?: string
+}) {
+  return `<tr><td colspan="${opts.colspan}">${emptyState({
+    icon: opts.icon,
+    title: opts.title,
+    text: opts.text,
+    action: opts.action,
+  })}</td></tr>`
 }
 
 // ---------------------------------------------------------------------------
@@ -2003,7 +2053,18 @@ export async function startUiServer(runtime: AgentRuntime) {
         ${profile?.selfServiceEnabled
           ? renderPlatformPrinterForm(snapshot.uiToken, sharedPrinterNames)
           : `<div class="alert alert-info" style="margin-top:12px;">Admin approval is required before this machine can publish or edit platform printers.</div>`}
-        ${platformPrinters.length === 0 ? '<p class="muted small" style="margin-top:12px;">No platform printers have been published from this machine yet.</p>' : ''}
+        ${platformPrinters.length === 0
+          ? `<div style="margin-top:12px;">${emptyState({
+              title: 'No printers published to customers yet',
+              text: profile?.selfServiceEnabled
+                ? 'Use the form above to publish your first printer. Once published, customers can find and print to it.'
+                : 'Once your machine is approved, publish a printer here so customers can find and print to it.',
+              action: `<form method="post" action="/actions/refresh">
+                ${hiddenUiToken(snapshot.uiToken)}
+                <button class="btn btn-secondary" type="submit">Refresh</button>
+              </form>`,
+            })}</div>`
+          : ''}
         ${platformPrinters.length > 0
           ? `<div style="margin-top:16px;">
               ${platformPrinters
@@ -2047,7 +2108,17 @@ export async function startUiServer(runtime: AgentRuntime) {
         <table class="data-table" style="margin-top:12px;">
           <thead><tr><th>Printer</th><th>Capabilities</th><th>Action</th></tr></thead>
           <tbody>
-            ${snapshot.printers.map((printer) => `
+            ${snapshot.printers.length === 0
+              ? tableEmptyState({
+                  colspan: 3,
+                  title: 'No printers detected on this PC yet',
+                  text: 'Connect a printer to this computer and install its Windows driver, then refresh to detect it here.',
+                  action: `<form method="post" action="/actions/refresh">
+                    ${hiddenUiToken(snapshot.uiToken)}
+                    <button class="btn btn-secondary" type="submit">Refresh printers</button>
+                  </form>`,
+                })
+              : snapshot.printers.map((printer) => `
               <tr>
                 <td>
                   <strong>${htmlEscape(printer.localPrinterName)}</strong><br/>
