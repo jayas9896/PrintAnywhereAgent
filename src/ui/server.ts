@@ -291,6 +291,39 @@ function optionalMoneyField(opts: { name: string; label: string; storedPaise: un
   `
 }
 
+/**
+ * Sticky-aware required rupee field for the publish form (KAN-40 P1-5).
+ * When `sticky.submitted` carries this field, the owner's raw typed rupee
+ * string is shown verbatim (so an invalid value like "abc" survives for
+ * correction); otherwise the stored paise value is formatted to rupees.
+ * A field-level error message is rendered beneath when one applies.
+ */
+function stickyMoneyField(opts: {
+  name: string
+  label: string
+  paiseValue: number | null | undefined
+  sticky?: StickyForm
+  spanClass?: string
+}) {
+  const span = opts.spanClass ? ` ${opts.spanClass}` : ''
+  const submitted = opts.sticky?.submitted
+  const hasSubmitted = !!submitted && Object.prototype.hasOwnProperty.call(submitted, opts.name)
+  const value = hasSubmitted
+    ? String(submitted![opts.name] ?? '')
+    : paiseToRupeeInput(opts.paiseValue)
+  const errored = opts.sticky?.fieldErrors?.[opts.name] ? ' has-error' : ''
+  return `
+    <label class="${(span + errored).trim()}">
+      <div class="label-text">${htmlEscape(opts.label)}</div>
+      <div class="money-input">
+        <input type="number" step="0.01" min="0" inputmode="decimal"
+          name="${htmlEscape(opts.name)}" value="${htmlEscape(value)}" />
+      </div>
+      ${fieldError(opts.sticky, opts.name)}
+    </label>
+  `
+}
+
 function renderCheckboxGroup<T extends string>(name: string, options: T[], selectedValues: T[]) {
   return options
     .map(
@@ -1444,6 +1477,47 @@ function renderFirstRunConfigForm(
 }
 
 /**
+ * A standalone, sticky-aware "shop details" form (server URL, display name,
+ * business address) used by the focused configure error page (KAN-40 P1-5).
+ * Unlike the first-run / dashboard inline configure forms it has no location
+ * capture — that is an explicit optional action elsewhere.
+ */
+function renderConfigureForm(
+  snapshot: ReturnType<AgentRuntime['snapshot']>,
+  configuredServerUrl: string,
+  sticky?: StickyForm,
+) {
+  const errClass = (name: string) => (sticky?.fieldErrors?.[name] ? ' has-error' : '')
+  return `
+    <div class="card-title">Your shop details</div>
+    <form method="post" action="/configure" class="stack">
+      ${hiddenUiToken(snapshot.uiToken)}
+      <label class="${errClass('displayName').trim()}">
+        <div class="label-text">A name for this PC</div>
+        <input type="text" name="displayName" value="${htmlEscape(stickyValue(sticky, 'displayName', snapshot.displayName))}" placeholder="Counter PC - Front Desk" />
+        <div class="hint">So you can recognise this machine in the admin portal. Optional.</div>
+        ${fieldError(sticky, 'displayName')}
+      </label>
+      <label class="${errClass('reportedBusinessAddress').trim()}">
+        <div class="label-text">Your shop address</div>
+        <input type="text" name="reportedBusinessAddress" value="${htmlEscape(stickyValue(sticky, 'reportedBusinessAddress', snapshot.reportedBusinessAddress ?? snapshot.profile?.reportedBusinessAddress))}" placeholder="Shop number, street, city, state" />
+        <div class="hint">The platform admin reviews this when approving your shop.</div>
+        ${fieldError(sticky, 'reportedBusinessAddress')}
+      </label>
+      <label class="${errClass('serverUrl').trim()}">
+        <div class="label-text">PrintAnywhere server address</div>
+        <input type="url" name="serverUrl" value="${htmlEscape(stickyValue(sticky, 'serverUrl', configuredServerUrl))}" placeholder="${htmlEscape(defaultPrintAnywhereBackendUrl())}" required />
+        <div class="hint">The production server is already filled in. Change this only if PrintAnywhere support asks you to.</div>
+        ${fieldError(sticky, 'serverUrl')}
+      </label>
+      <div class="btn-row">
+        <button class="btn btn-primary" type="submit">Save shop details</button>
+      </div>
+    </form>
+  `
+}
+
+/**
  * The full guided first-run screen (KAN-37). Renders one of two states:
  *  - `config`: a welcome, a step list, and the focused config form.
  *  - `awaiting-pairing`: a welcome, the step list (config done), the hero
@@ -1827,20 +1901,69 @@ const SHARED_SCRIPTS = `<script>
  * The constraint builders treat empty fields as "rule disabled", so an
  * unopened accordion always produces a valid submit.
  */
-export function renderAdvancedPrinterSections(printer: PlatformPrinter | null | undefined) {
+export function renderAdvancedPrinterSections(
+  printer: PlatformPrinter | null | undefined,
+  sticky?: StickyForm,
+) {
   const size = findConstraint(printer, 'MAX_SINGLE_PDF_SIZE')
   const pageCount = findConstraint(printer, 'MAX_SINGLE_PDF_PAGE_COUNT')
   const pageCoverage = findConstraint(printer, 'MAX_SINGLE_PDF_PAGE_COVERAGE')
   const manualApproval = findConstraint(printer, 'REQUIRE_MANUAL_APPROVAL_FOR_DENSITY_OR_PRICE_CHANGE')
   const pricingFloor = findPricingAdjustment(printer, 'INK_COVERAGE_FLOOR')
 
+  // KAN-40 P1-5: when re-rendering after a failed submit, each advanced field
+  // prefers the owner's typed value over the stored constraint value.
+  const adv = (name: string, fallback: unknown) =>
+    htmlEscape(stickyValue(sticky, name, String(fallback ?? '')))
+  // A sticky-aware optional money field: typed rupee value survives a failed
+  // submit; otherwise the stored paise value is formatted to rupees.
+  const optMoney = (name: string, label: string, storedPaise: unknown) => {
+    const submitted = sticky?.submitted
+    if (submitted && Object.prototype.hasOwnProperty.call(submitted, name)) {
+      const raw = String(submitted[name] ?? '')
+      return `<label>
+        <div class="label-text">${htmlEscape(label)}</div>
+        <div class="money-input">
+          <input type="number" step="0.01" min="0" inputmode="decimal"
+            name="${htmlEscape(name)}" value="${htmlEscape(raw)}" placeholder="0.00" />
+        </div>
+        ${fieldError(sticky, name)}
+      </label>`
+    }
+    return optionalMoneyField({ name, label, storedPaise })
+  }
+
   const hasValues = (obj: Record<string, unknown>) =>
     Object.values(obj).some((value) => String(value ?? '').trim() !== '')
+  // A submitted (sticky) body counts as "has values" for an accordion when the
+  // owner had typed into any of that section's named fields.
+  const submittedHas = (...names: string[]) => {
+    const submitted = sticky?.submitted
+    if (!submitted) return false
+    return names.some((name) => String(submitted[name] ?? '').trim() !== '')
+  }
   const open = (condition: boolean) => (condition ? ' open' : '')
 
-  const constraintsOpen = open(hasValues(size) || hasValues(pageCount) || hasValues(pageCoverage))
-  const manualApprovalOpen = open(hasValues(manualApproval))
-  const pricingFloorOpen = open(hasValues(pricingFloor))
+  const constraintsOpen = open(
+    hasValues(size) || hasValues(pageCount) || hasValues(pageCoverage)
+      || submittedHas('constraintMaxSizeMb', 'constraintMaxPageCount', 'constraintMaxPageCoveragePercent'),
+  )
+  const manualApprovalOpen = open(
+    hasValues(manualApproval)
+      || submittedHas(
+        'manualApprovalMaxPageCoveragePercent', 'manualApprovalBlackFullPagePriceMinor',
+        'manualApprovalColorFullPagePriceMinor', 'manualApprovalBlackConversionFactor',
+        'manualApprovalColorConversionFactor', 'manualApprovalIccProfilePath',
+      ),
+  )
+  const pricingFloorOpen = open(
+    hasValues(pricingFloor)
+      || submittedHas(
+        'pricingFloorBlackFullPagePriceMinor', 'pricingFloorColorFullPagePriceMinor',
+        'pricingFloorBlackConversionFactor', 'pricingFloorColorConversionFactor',
+        'pricingFloorIccProfilePath',
+      ),
+  )
 
   return `
     <div class="subsection">
@@ -1856,15 +1979,15 @@ export function renderAdvancedPrinterSections(printer: PlatformPrinter | null | 
         <div class="grid-3" style="margin-top:10px;">
           <label>
             <div class="label-text">Max PDF size (MB)</div>
-            <input type="text" name="constraintMaxSizeMb" value="${htmlEscape(size.maxSizeMb ?? '')}" placeholder="15" />
+            <input type="text" name="constraintMaxSizeMb" value="${adv('constraintMaxSizeMb', size.maxSizeMb)}" placeholder="15" />
           </label>
           <label>
             <div class="label-text">Max PDF pages</div>
-            <input type="text" name="constraintMaxPageCount" value="${htmlEscape(pageCount.maxPageCount ?? '')}" placeholder="100" />
+            <input type="text" name="constraintMaxPageCount" value="${adv('constraintMaxPageCount', pageCount.maxPageCount)}" placeholder="100" />
           </label>
           <label>
             <div class="label-text">Max printed area per page (%)</div>
-            <input type="text" name="constraintMaxPageCoveragePercent" value="${htmlEscape(pageCoverage.maxPageCoveragePercent ?? '')}" placeholder="65" />
+            <input type="text" name="constraintMaxPageCoveragePercent" value="${adv('constraintMaxPageCoveragePercent', pageCoverage.maxPageCoveragePercent)}" placeholder="65" />
           </label>
         </div>
       </details>
@@ -1875,21 +1998,21 @@ export function renderAdvancedPrinterSections(printer: PlatformPrinter | null | 
         <div class="grid-3" style="margin-top:10px;">
           <label>
             <div class="label-text">Coverage threshold (%)</div>
-            <input type="text" name="manualApprovalMaxPageCoveragePercent" value="${htmlEscape(manualApproval.maxPageCoveragePercent ?? '')}" placeholder="65" />
+            <input type="text" name="manualApprovalMaxPageCoveragePercent" value="${adv('manualApprovalMaxPageCoveragePercent', manualApproval.maxPageCoveragePercent)}" placeholder="65" />
           </label>
-          ${optionalMoneyField({ name: 'manualApprovalBlackFullPagePriceMinor', label: 'Black full-page price', storedPaise: manualApproval.blackFullPagePriceMinor })}
-          ${optionalMoneyField({ name: 'manualApprovalColorFullPagePriceMinor', label: 'Color full-page price', storedPaise: manualApproval.colorFullPagePriceMinor })}
+          ${optMoney('manualApprovalBlackFullPagePriceMinor', 'Black full-page price', manualApproval.blackFullPagePriceMinor)}
+          ${optMoney('manualApprovalColorFullPagePriceMinor', 'Color full-page price', manualApproval.colorFullPagePriceMinor)}
           <label>
             <div class="label-text">Black conversion factor</div>
-            <input type="text" name="manualApprovalBlackConversionFactor" value="${htmlEscape(manualApproval.blackConversionFactor ?? '')}" placeholder="1.00" />
+            <input type="text" name="manualApprovalBlackConversionFactor" value="${adv('manualApprovalBlackConversionFactor', manualApproval.blackConversionFactor)}" placeholder="1.00" />
           </label>
           <label>
             <div class="label-text">Color conversion factor</div>
-            <input type="text" name="manualApprovalColorConversionFactor" value="${htmlEscape(manualApproval.colorConversionFactor ?? '')}" placeholder="1.00" />
+            <input type="text" name="manualApprovalColorConversionFactor" value="${adv('manualApprovalColorConversionFactor', manualApproval.colorConversionFactor)}" placeholder="1.00" />
           </label>
           <label class="span-3">
             <div class="label-text">ICC profile path</div>
-            <input type="text" name="manualApprovalIccProfilePath" value="${htmlEscape(manualApproval.iccProfilePath ?? '')}" placeholder="/opt/print-profiles/printer.icc" />
+            <input type="text" name="manualApprovalIccProfilePath" value="${adv('manualApprovalIccProfilePath', manualApproval.iccProfilePath)}" placeholder="/opt/print-profiles/printer.icc" />
           </label>
         </div>
       </details>
@@ -1898,19 +2021,19 @@ export function renderAdvancedPrinterSections(printer: PlatformPrinter | null | 
         <summary><span class="summary-row"><span>Usage-based ink pricing floor</span></span></summary>
         <p class="muted small">Charge more for heavy-ink pages. Leave all fields empty to disable.</p>
         <div class="grid-3" style="margin-top:10px;">
-          ${optionalMoneyField({ name: 'pricingFloorBlackFullPagePriceMinor', label: 'Black full-page price', storedPaise: pricingFloor.blackFullPagePriceMinor })}
-          ${optionalMoneyField({ name: 'pricingFloorColorFullPagePriceMinor', label: 'Color full-page price', storedPaise: pricingFloor.colorFullPagePriceMinor })}
+          ${optMoney('pricingFloorBlackFullPagePriceMinor', 'Black full-page price', pricingFloor.blackFullPagePriceMinor)}
+          ${optMoney('pricingFloorColorFullPagePriceMinor', 'Color full-page price', pricingFloor.colorFullPagePriceMinor)}
           <label>
             <div class="label-text">Black conversion factor</div>
-            <input type="text" name="pricingFloorBlackConversionFactor" value="${htmlEscape(pricingFloor.blackConversionFactor ?? '')}" placeholder="1.00" />
+            <input type="text" name="pricingFloorBlackConversionFactor" value="${adv('pricingFloorBlackConversionFactor', pricingFloor.blackConversionFactor)}" placeholder="1.00" />
           </label>
           <label>
             <div class="label-text">Color conversion factor</div>
-            <input type="text" name="pricingFloorColorConversionFactor" value="${htmlEscape(pricingFloor.colorConversionFactor ?? '')}" placeholder="1.00" />
+            <input type="text" name="pricingFloorColorConversionFactor" value="${adv('pricingFloorColorConversionFactor', pricingFloor.colorConversionFactor)}" placeholder="1.00" />
           </label>
           <label class="span-3">
             <div class="label-text">ICC profile path</div>
-            <input type="text" name="pricingFloorIccProfilePath" value="${htmlEscape(pricingFloor.iccProfilePath ?? '')}" placeholder="/opt/print-profiles/printer.icc" />
+            <input type="text" name="pricingFloorIccProfilePath" value="${adv('pricingFloorIccProfilePath', pricingFloor.iccProfilePath)}" placeholder="/opt/print-profiles/printer.icc" />
           </label>
         </div>
       </details>
@@ -1922,14 +2045,30 @@ export function renderPlatformPrinterForm(
   uiToken: string | null | undefined,
   availablePrinterNames: string[],
   printer?: PlatformPrinter,
+  sticky?: StickyForm,
 ) {
   const title = printer ? printer.name : 'Publish a new platform printer'
   const submitLabel = printer ? 'Save printer' : 'Publish printer'
-  const status = printer?.status ?? 'ONLINE'
-  const colorModes = printer?.supportedColorModes ?? COLOR_MODE_OPTIONS
-  const sidesModes = printer?.supportedSidesModes ?? SIDES_MODE_OPTIONS
-  const pageSizes = printer?.supportedPageSizes ?? PAGE_SIZE_OPTIONS
-  const scalingModes = printer?.supportedScalingModes ?? SCALING_MODE_OPTIONS
+
+  // KAN-40 P1-5: a sticky checkbox-group value resolver. After a failed
+  // submit, prefer the owner's submitted ticks; otherwise the printer's
+  // stored modes (and the all-options default for a brand-new printer).
+  const submitted = sticky?.submitted
+  const hasSub = (name: string) =>
+    !!submitted && Object.prototype.hasOwnProperty.call(submitted, name)
+  const groupValue = <T extends string>(name: string, stored: T[] | undefined, all: T[]): T[] => {
+    if (hasSub(name)) return asArray(submitted![name]) as T[]
+    return stored ?? all
+  }
+  const status = (hasSub('status') ? String(submitted!.status ?? '') : printer?.status) || 'ONLINE'
+  const colorModes = groupValue('supportedColorModes', printer?.supportedColorModes, COLOR_MODE_OPTIONS)
+  const sidesModes = groupValue('supportedSidesModes', printer?.supportedSidesModes, SIDES_MODE_OPTIONS)
+  const pageSizes = groupValue('supportedPageSizes', printer?.supportedPageSizes, PAGE_SIZE_OPTIONS)
+  const scalingModes = groupValue('supportedScalingModes', printer?.supportedScalingModes, SCALING_MODE_OPTIONS)
+  const agentPrinterName = hasSub('agentPrinterName')
+    ? String(submitted!.agentPrinterName ?? '')
+    : (printer?.agentPrinterName ?? '')
+  const errClass = (name: string) => (sticky?.fieldErrors?.[name] ? ' has-error' : '')
 
   return `
     <form method="post" action="/platform-printers/save" class="stack">
@@ -1937,24 +2076,26 @@ export function renderPlatformPrinterForm(
       ${printer ? `<input type="hidden" name="printerId" value="${htmlEscape(printer.printerId)}" />` : ''}
       <div class="card-title">${htmlEscape(title)}</div>
       <div class="grid-2">
-        <label>
+        <label class="${errClass('name').trim()}">
           <div class="label-text">Platform printer name</div>
-          <input type="text" name="name" value="${htmlEscape(printer?.name ?? '')}" placeholder="Front Desk A4" required />
+          <input type="text" name="name" value="${htmlEscape(stickyValue(sticky, 'name', printer?.name))}" placeholder="Front Desk A4" required />
+          ${fieldError(sticky, 'name')}
         </label>
-        <label>
+        <label class="${errClass('agentPrinterName').trim()}">
           <div class="label-text">Shared local printer</div>
           <select name="agentPrinterName" required>
             <option value="">Select a shared printer</option>
             ${availablePrinterNames
               .map(
                 (printerName) =>
-                  `<option value="${htmlEscape(printerName)}" ${selected(printer?.agentPrinterName, printerName)}>${htmlEscape(printerName)}</option>`,
+                  `<option value="${htmlEscape(printerName)}" ${selected(agentPrinterName, printerName)}>${htmlEscape(printerName)}</option>`,
               )
               .join('')}
           </select>
+          ${fieldError(sticky, 'agentPrinterName')}
         </label>
         <label class="choice">
-          <input type="checkbox" name="enabled" ${checked(printer?.enabled ?? true)} />
+          <input type="checkbox" name="enabled" ${checked(stickyChecked(sticky, 'enabled', printer?.enabled ?? true))} />
           <span>Enabled for customer orders</span>
         </label>
         <label>
@@ -1970,9 +2111,9 @@ export function renderPlatformPrinterForm(
         <div class="subsection-title">Pricing</div>
         <p class="muted small">Enter prices in rupees — for example, type 2.50 for ₹2.50.</p>
         <div class="grid-3" style="margin-top:10px;">
-          ${moneyField({ name: 'baseJobPriceMinor', label: 'Base price per job', paiseValue: printer?.baseJobPriceMinor })}
-          ${moneyField({ name: 'monochromePagePriceMinor', label: 'Black & white page price', paiseValue: printer?.monochromePagePriceMinor })}
-          ${moneyField({ name: 'colorPagePriceMinor', label: 'Colour page price', paiseValue: printer?.colorPagePriceMinor })}
+          ${stickyMoneyField({ name: 'baseJobPriceMinor', label: 'Base price per job', paiseValue: printer?.baseJobPriceMinor, sticky })}
+          ${stickyMoneyField({ name: 'monochromePagePriceMinor', label: 'Black & white page price', paiseValue: printer?.monochromePagePriceMinor, sticky })}
+          ${stickyMoneyField({ name: 'colorPagePriceMinor', label: 'Colour page price', paiseValue: printer?.colorPagePriceMinor, sticky })}
         </div>
       </div>
       <div class="subsection">
@@ -2001,35 +2142,37 @@ export function renderPlatformPrinterForm(
         <p class="muted small" style="margin-bottom:10px;">
           Optional. Pre-filled with sensible defaults — open a section only to change it.
         </p>
-        <details>
+        <details${hasSub('duplexSheetSurchargeMinor') || hasSub('a3PageSurchargeMinor') || hasSub('glossyPaperSurchargeMinor') ? ' open' : ''}>
           <summary><span class="summary-row"><span>Surcharges</span></span></summary>
           <p class="muted small">Extra charges added on top of the page prices above.</p>
           <div class="grid-3" style="margin-top:10px;">
-            ${moneyField({ name: 'duplexSheetSurchargeMinor', label: 'Double-sided surcharge', paiseValue: printer?.duplexSheetSurchargeMinor })}
-            ${moneyField({ name: 'a3PageSurchargeMinor', label: 'A3 page surcharge', paiseValue: printer?.a3PageSurchargeMinor })}
-            ${moneyField({ name: 'glossyPaperSurchargeMinor', label: 'Glossy paper surcharge', paiseValue: printer?.glossyPaperSurchargeMinor })}
+            ${stickyMoneyField({ name: 'duplexSheetSurchargeMinor', label: 'Double-sided surcharge', paiseValue: printer?.duplexSheetSurchargeMinor, sticky })}
+            ${stickyMoneyField({ name: 'a3PageSurchargeMinor', label: 'A3 page surcharge', paiseValue: printer?.a3PageSurchargeMinor, sticky })}
+            ${stickyMoneyField({ name: 'glossyPaperSurchargeMinor', label: 'Glossy paper surcharge', paiseValue: printer?.glossyPaperSurchargeMinor, sticky })}
           </div>
         </details>
-        <details${printer?.supportsSecureCoverSheets ? ' open' : ''}>
+        <details${stickyChecked(sticky, 'supportsSecureCoverSheets', printer?.supportsSecureCoverSheets ?? false) ? ' open' : ''}>
           <summary><span class="summary-row"><span>Secure cover packet</span></span></summary>
           <div class="grid-3" style="margin-top:10px;">
             <label class="choice span-3">
-              <input type="checkbox" name="supportsSecureCoverSheets" ${checked(printer?.supportsSecureCoverSheets ?? false)} />
+              <input type="checkbox" name="supportsSecureCoverSheets" ${checked(stickyChecked(sticky, 'supportsSecureCoverSheets', printer?.supportsSecureCoverSheets ?? false))} />
               <span>Offer secure cover packets</span>
             </label>
-            ${moneyField({ name: 'secureCoverSheetPriceMinor', label: 'Secure cover surcharge', paiseValue: printer?.secureCoverSheetPriceMinor })}
-            <label>
+            ${stickyMoneyField({ name: 'secureCoverSheetPriceMinor', label: 'Secure cover surcharge', paiseValue: printer?.secureCoverSheetPriceMinor, sticky })}
+            <label class="${errClass('secureCoverSheetColorName').trim()}">
               <div class="label-text">Secure cover color</div>
-              <input type="text" name="secureCoverSheetColorName" value="${htmlEscape(printer?.secureCoverSheetColorName ?? 'WHITE')}" />
+              <input type="text" name="secureCoverSheetColorName" value="${htmlEscape(stickyValue(sticky, 'secureCoverSheetColorName', printer?.secureCoverSheetColorName ?? 'WHITE'))}" />
+              ${fieldError(sticky, 'secureCoverSheetColorName')}
             </label>
-            <label class="span-3">
+            <label class="span-3 ${errClass('secureCoverSheetLabel').trim()}">
               <div class="label-text">Secure cover label</div>
-              <input type="text" name="secureCoverSheetLabel" value="${htmlEscape(printer?.secureCoverSheetLabel ?? 'SECURE-DO-NOT-OPEN')}" />
+              <input type="text" name="secureCoverSheetLabel" value="${htmlEscape(stickyValue(sticky, 'secureCoverSheetLabel', printer?.secureCoverSheetLabel ?? 'SECURE-DO-NOT-OPEN'))}" />
+              ${fieldError(sticky, 'secureCoverSheetLabel')}
             </label>
           </div>
         </details>
       </div>
-      ${renderAdvancedPrinterSections(printer)}
+      ${renderAdvancedPrinterSections(printer, sticky)}
       <div class="btn-row">
         <button class="btn btn-primary" type="submit">${htmlEscape(submitLabel)}</button>
       </div>
@@ -2037,34 +2180,106 @@ export function renderPlatformPrinterForm(
   `
 }
 
-function buildManagedPrinterPayload(body: Record<string, unknown>, printerId?: string | null): PlatformPrinterUpsertInput {
+/**
+ * Validate a submitted publish-printer body, collecting EVERY field error at
+ * once (KAN-40 P1-5) rather than throwing on the first bad field — so the
+ * sticky re-render can flag all offenders together. Returns the built payload
+ * when valid, or `{ payload: null, errors }` keyed by form field name.
+ *
+ * Exported so the validation contract is unit-testable without an HTTP round
+ * trip — the ~12-field publish form is the most painful one to lose input on.
+ */
+export function validatePlatformPrinterPayload(
+  body: Record<string, unknown>,
+  printerId?: string | null,
+): { payload: PlatformPrinterUpsertInput | null; errors: Record<string, string> } {
+  const errors: Record<string, string> = {}
+
+  // Required text fields.
+  const requireText = (name: string, message: string) => {
+    const value = String(body[name] ?? '').trim()
+    if (!value) errors[name] = message
+    return value
+  }
+  // A required rupee field — records a field error instead of throwing.
+  const requireMoney = (name: string, label: string): number => {
+    try {
+      return parseRupeesToPaise(body[name], label)
+    } catch (error) {
+      errors[name] = error instanceof Error ? error.message : `${label} is invalid.`
+      return 0
+    }
+  }
+  // An optional rupee field used by the advanced sections.
+  const optionalMoney = (name: string, label: string): string | null => {
+    try {
+      return parseOptionalRupeesToPaise(body[name], label)
+    } catch (error) {
+      errors[name] = error instanceof Error ? error.message : `${label} is invalid.`
+      return null
+    }
+  }
+
+  const name = requireText('name', 'Give this printer a name customers will see.')
+  const agentPrinterName = requireText('agentPrinterName', 'Choose which shared printer on this PC to publish.')
+  const secureCoverSheetColorName = requireText('secureCoverSheetColorName', 'Enter a colour for the secure cover sheet.')
+  const secureCoverSheetLabel = requireText('secureCoverSheetLabel', 'Enter a label for the secure cover sheet.')
+  const status = String(body.status ?? '').trim() || 'ONLINE'
+
+  const baseJobPriceMinor = requireMoney('baseJobPriceMinor', 'Base price per job')
+  const monochromePagePriceMinor = requireMoney('monochromePagePriceMinor', 'Black & white page price')
+  const colorPagePriceMinor = requireMoney('colorPagePriceMinor', 'Colour page price')
+  const duplexSheetSurchargeMinor = requireMoney('duplexSheetSurchargeMinor', 'Double-sided surcharge')
+  const a3PageSurchargeMinor = requireMoney('a3PageSurchargeMinor', 'A3 page surcharge')
+  const glossyPaperSurchargeMinor = requireMoney('glossyPaperSurchargeMinor', 'Glossy paper surcharge')
+  const secureCoverSheetPriceMinor = requireMoney('secureCoverSheetPriceMinor', 'Secure cover surcharge')
+
+  // Advanced optional rupee fields — collect any conversion errors too.
+  const manualApprovalBlackPrice = optionalMoney('manualApprovalBlackFullPagePriceMinor', 'Manual-approval black full-page price')
+  const manualApprovalColorPrice = optionalMoney('manualApprovalColorFullPagePriceMinor', 'Manual-approval colour full-page price')
+  const pricingFloorBlackPrice = optionalMoney('pricingFloorBlackFullPagePriceMinor', 'Pricing-floor black full-page price')
+  const pricingFloorColorPrice = optionalMoney('pricingFloorColorFullPagePriceMinor', 'Pricing-floor colour full-page price')
+
+  if (Object.keys(errors).length > 0) {
+    return { payload: null, errors }
+  }
+
   return {
-    printerId: printerId || null,
-    name: parseRequiredText(body, 'name'),
-    agentPrinterName: parseRequiredText(body, 'agentPrinterName'),
-    enabled: hasCheckbox(body, 'enabled'),
-    status: parseRequiredText(body, 'status') as PlatformPrinterStatus,
-    // Prices are entered by the owner in rupees and converted to paise here.
-    glossyPaperSurchargeMinor: parseRupeesToPaise(body.glossyPaperSurchargeMinor, 'Glossy paper surcharge'),
-    baseJobPriceMinor: parseRupeesToPaise(body.baseJobPriceMinor, 'Base price per job'),
-    monochromePagePriceMinor: parseRupeesToPaise(body.monochromePagePriceMinor, 'Black & white page price'),
-    colorPagePriceMinor: parseRupeesToPaise(body.colorPagePriceMinor, 'Colour page price'),
-    duplexSheetSurchargeMinor: parseRupeesToPaise(body.duplexSheetSurchargeMinor, 'Double-sided surcharge'),
-    a3PageSurchargeMinor: parseRupeesToPaise(body.a3PageSurchargeMinor, 'A3 page surcharge'),
-    documentConstraints: buildDocumentConstraints(body),
-    pricingAdjustments: buildPricingAdjustments(body),
-    supportedColorModes: asArray(body.supportedColorModes) as PlatformColorMode[],
-    supportedSidesModes: asArray(body.supportedSidesModes) as PlatformSidesMode[],
-    supportedPageSizes: asArray(body.supportedPageSizes) as PlatformPageSize[],
-    supportedScalingModes: asArray(body.supportedScalingModes) as PlatformScalingMode[],
-    supportsSecureCoverSheets: hasCheckbox(body, 'supportsSecureCoverSheets'),
-    secureCoverSheetPriceMinor: parseRupeesToPaise(body.secureCoverSheetPriceMinor, 'Secure cover surcharge'),
-    secureCoverSheetColorName: parseRequiredText(body, 'secureCoverSheetColorName'),
-    secureCoverSheetLabel: parseRequiredText(body, 'secureCoverSheetLabel'),
+    payload: {
+      printerId: printerId || null,
+      name,
+      agentPrinterName,
+      enabled: hasCheckbox(body, 'enabled'),
+      status: status as PlatformPrinterStatus,
+      glossyPaperSurchargeMinor,
+      baseJobPriceMinor,
+      monochromePagePriceMinor,
+      colorPagePriceMinor,
+      duplexSheetSurchargeMinor,
+      a3PageSurchargeMinor,
+      documentConstraints: buildDocumentConstraints(body, manualApprovalBlackPrice, manualApprovalColorPrice),
+      pricingAdjustments: buildPricingAdjustments(body, pricingFloorBlackPrice, pricingFloorColorPrice),
+      supportedColorModes: asArray(body.supportedColorModes) as PlatformColorMode[],
+      supportedSidesModes: asArray(body.supportedSidesModes) as PlatformSidesMode[],
+      supportedPageSizes: asArray(body.supportedPageSizes) as PlatformPageSize[],
+      supportedScalingModes: asArray(body.supportedScalingModes) as PlatformScalingMode[],
+      supportsSecureCoverSheets: hasCheckbox(body, 'supportsSecureCoverSheets'),
+      secureCoverSheetPriceMinor,
+      secureCoverSheetColorName,
+      secureCoverSheetLabel,
+    },
+    errors,
   }
 }
 
-function buildDocumentConstraints(body: Record<string, unknown>): ConfiguredConstraint[] {
+// `manualApprovalBlackPrice`/`manualApprovalColorPrice` are pre-parsed paise
+// strings (or null) supplied by validatePlatformPrinterPayload, so this
+// builder never re-parses rupee input and never throws.
+function buildDocumentConstraints(
+  body: Record<string, unknown>,
+  manualApprovalBlackPrice: string | null,
+  manualApprovalColorPrice: string | null,
+): ConfiguredConstraint[] {
   const constraints: ConfiguredConstraint[] = []
   const maxSizeMb = parseOptionalTrimmed(body, 'constraintMaxSizeMb')
   if (maxSizeMb) constraints.push({ type: 'MAX_SINGLE_PDF_SIZE', configuration: { maxSizeMb } })
@@ -2073,8 +2288,6 @@ function buildDocumentConstraints(body: Record<string, unknown>): ConfiguredCons
   const maxPageCoveragePercent = parseOptionalTrimmed(body, 'constraintMaxPageCoveragePercent')
   if (maxPageCoveragePercent) constraints.push({ type: 'MAX_SINGLE_PDF_PAGE_COVERAGE', configuration: { maxPageCoveragePercent } })
   const manualApprovalCoverage = parseOptionalTrimmed(body, 'manualApprovalMaxPageCoveragePercent')
-  const manualApprovalBlackPrice = parseOptionalRupeesToPaise(body.manualApprovalBlackFullPagePriceMinor, 'Manual-approval black full-page price')
-  const manualApprovalColorPrice = parseOptionalRupeesToPaise(body.manualApprovalColorFullPagePriceMinor, 'Manual-approval colour full-page price')
   if (manualApprovalCoverage || manualApprovalBlackPrice || manualApprovalColorPrice) {
     constraints.push({
       type: 'REQUIRE_MANUAL_APPROVAL_FOR_DENSITY_OR_PRICE_CHANGE',
@@ -2091,9 +2304,13 @@ function buildDocumentConstraints(body: Record<string, unknown>): ConfiguredCons
   return constraints
 }
 
-function buildPricingAdjustments(body: Record<string, unknown>): ConfiguredConstraint[] {
-  const blackPrice = parseOptionalRupeesToPaise(body.pricingFloorBlackFullPagePriceMinor, 'Pricing-floor black full-page price')
-  const colorPrice = parseOptionalRupeesToPaise(body.pricingFloorColorFullPagePriceMinor, 'Pricing-floor colour full-page price')
+// `blackPrice`/`colorPrice` are pre-parsed paise strings (or null) supplied
+// by validatePlatformPrinterPayload — this builder never re-parses or throws.
+function buildPricingAdjustments(
+  body: Record<string, unknown>,
+  blackPrice: string | null,
+  colorPrice: string | null,
+): ConfiguredConstraint[] {
   if (!blackPrice && !colorPrice) return []
   return [{
     type: 'INK_COVERAGE_FLOOR',
@@ -2375,14 +2592,22 @@ export function stickyValue(
   return fallback ?? ''
 }
 
-/** True when the owner ticked a checkbox in the submitted body. */
+/**
+ * True when a checkbox should render ticked on a sticky re-render.
+ *
+ * An unticked HTML checkbox is *absent* from the submitted body — so when a
+ * submitted body exists at all (a re-render after a failed submit), an absent
+ * checkbox means the owner left it unticked and must read `false`, NOT revert
+ * to the stored fallback. The fallback applies only when there is no sticky
+ * submission (a fresh GET render).
+ */
 export function stickyChecked(
   sticky: StickyForm | null | undefined,
   name: string,
   fallback: boolean,
 ): boolean {
   const submitted = sticky?.submitted
-  if (submitted && Object.prototype.hasOwnProperty.call(submitted, name)) {
+  if (submitted) {
     return String(submitted[name] ?? '') === 'on'
   }
   return fallback
@@ -2393,6 +2618,34 @@ export function fieldError(sticky: StickyForm | null | undefined, name: string):
   const message = sticky?.fieldErrors?.[name]
   if (!message) return ''
   return `<div class="field-error" role="alert">${htmlEscape(message)}</div>`
+}
+
+/**
+ * A focused "fix and resubmit" page rendered when a large form fails
+ * validation. Rather than re-rendering the whole dashboard, the owner sees
+ * just the offending form (sticky, with field errors) plus a clear lead
+ * message and a "Back to dashboard" link — keeping them in correction mode.
+ */
+function renderFormErrorPage(opts: {
+  eyebrow: string
+  title: string
+  lead: string
+  leadVariant?: 'warning' | 'error'
+  formHtml: string
+  backHref: string
+  backLabel: string
+}): string {
+  return `
+    <div>
+      <div class="page-eyebrow">${htmlEscape(opts.eyebrow)}</div>
+      <div class="page-title">${htmlEscape(opts.title)}</div>
+    </div>
+    ${stateBanner({ variant: opts.leadVariant ?? 'error', title: opts.lead })}
+    <div class="card">${opts.formHtml}</div>
+    <div class="btn-row">
+      <a class="btn btn-secondary" href="${htmlEscape(opts.backHref)}">${htmlEscape(opts.backLabel)}</a>
+    </div>
+  `
 }
 
 // ---------------------------------------------------------------------------
@@ -3273,17 +3526,69 @@ export async function startUiServer(runtime: AgentRuntime) {
 
   app.post('/configure', async (request, response) => {
     if (!verifyUiRequest(runtime, request, response)) return
+    const body = request.body as Record<string, unknown>
+    const snapshot = runtime.snapshot()
+
+    // KAN-40 P1-5: validate the shop-details fields up-front so a failed
+    // submit re-renders sticky instead of redirecting to a blank snapshot.
+    const errors: Record<string, string> = {}
+    const serverUrl = String(body.serverUrl ?? '').trim()
+    if (!serverUrl) {
+      errors.serverUrl = 'Enter the PrintAnywhere server address.'
+    } else {
+      try {
+        const parsed = new URL(serverUrl)
+        if (!['http:', 'https:'].includes(parsed.protocol)) {
+          errors.serverUrl = 'The server address must start with http:// or https://.'
+        }
+      } catch {
+        errors.serverUrl = 'That does not look like a valid web address.'
+      }
+    }
+
+    const renderConfigError = (lead: string, leadVariant: 'warning' | 'error', fieldErrors: Record<string, string>) => {
+      const formHtml = renderConfigureForm(snapshot, serverUrl || defaultPrintAnywhereBackendUrl(), {
+        submitted: body,
+        fieldErrors,
+      })
+      response.status(leadVariant === 'error' ? 502 : 400).type('html').send(
+        pageShell(
+          { title: 'Check shop details', activePage: 'dashboard', snapshot },
+          renderFormErrorPage({
+            eyebrow: 'Shop setup',
+            title: leadVariant === 'error' ? 'Could not save your details' : 'A detail needs fixing',
+            lead,
+            leadVariant,
+            formHtml,
+            backHref: '/',
+            backLabel: 'Back to dashboard',
+          }),
+        ),
+      )
+    }
+
+    if (Object.keys(errors).length > 0) {
+      renderConfigError('Please correct the highlighted field — nothing you typed has been lost.', 'warning', errors)
+      return
+    }
+
     try {
       await runtime.configure(
-        String(request.body.serverUrl ?? ''),
-        String(request.body.displayName ?? ''),
-        String(request.body.reportedBusinessAddress ?? ''),
+        serverUrl,
+        String(body.displayName ?? ''),
+        String(body.reportedBusinessAddress ?? ''),
       )
-      const location = parseBrowserLocationBody(request.body as Record<string, unknown>)
+      const location = parseBrowserLocationBody(body)
       if (location) await runtime.setBrowserLocation(location)
-      redirectWithStatus(response, 'notice', 'Backend configuration saved.')
+      redirectWithStatus(response, 'notice', 'Your shop details were saved.')
     } catch (error) {
-      redirectWithStatus(response, 'error', friendlyConfigureError(error))
+      // friendlyConfigureError handles the "already registered" CONFLICT
+      // case; everything else flows through the friendly cloud-error mapper.
+      const message = friendlyConfigureError(error)
+      const lead = message.includes('already registered')
+        ? message
+        : `${mapCloudError(error).body} Your details below are kept — press Save to try again.`
+      renderConfigError(lead, 'error', {})
     }
   })
 
@@ -3350,12 +3655,65 @@ export async function startUiServer(runtime: AgentRuntime) {
 
   app.post('/platform-printers/save', async (request, response) => {
     if (!verifyUiRequest(runtime, request, response)) return
+    const body = request.body as Record<string, unknown>
+    const snapshot = runtime.snapshot()
+    const printerId = parseOptionalTrimmed(body, 'printerId')
+    const sharedPrinterNames = snapshot.printers
+      .filter((printer) => printer.shared)
+      .map((printer) => printer.localPrinterName)
+    const existing = printerId
+      ? (snapshot.platformPrinters ?? []).find((p) => p.printerId === printerId)
+      : undefined
+
+    // KAN-40 P1-5: validate up-front and collect every field error so the
+    // ~12-field publish form can be re-rendered with the owner's input intact.
+    const { payload, errors } = validatePlatformPrinterPayload(body, printerId)
+    if (!payload) {
+      const formHtml = renderPlatformPrinterForm(snapshot.uiToken, sharedPrinterNames, existing, {
+        submitted: body,
+        fieldErrors: errors,
+      })
+      response.status(400).type('html').send(
+        pageShell(
+          { title: 'Fix printer details', activePage: 'dashboard', snapshot },
+          renderFormErrorPage({
+            eyebrow: 'Publish a printer',
+            title: 'A few details need fixing',
+            lead: 'Please correct the highlighted fields below — nothing you typed has been lost.',
+            leadVariant: 'warning',
+            formHtml,
+            backHref: '/',
+            backLabel: 'Back to dashboard without saving',
+          }),
+        ),
+      )
+      return
+    }
+
     try {
-      const body = request.body as Record<string, unknown>
-      await runtime.upsertPlatformPrinter(buildManagedPrinterPayload(body, parseOptionalTrimmed(body, 'printerId')))
+      await runtime.upsertPlatformPrinter(payload)
       redirectWithStatus(response, 'notice', 'Platform printer saved.')
     } catch (error) {
-      redirectWithStatus(response, 'error', error instanceof Error ? error.message : 'Could not save platform printer')
+      // A cloud-side failure — re-render the form sticky so input survives,
+      // with the friendly offline message instead of raw exception text.
+      const friendly = mapCloudError(error)
+      const formHtml = renderPlatformPrinterForm(snapshot.uiToken, sharedPrinterNames, existing, {
+        submitted: body,
+      })
+      response.status(502).type('html').send(
+        pageShell(
+          { title: 'Could not save printer', activePage: 'dashboard', snapshot },
+          renderFormErrorPage({
+            eyebrow: 'Publish a printer',
+            title: friendly.title,
+            lead: `${friendly.body} Your details below are kept — press "Publish printer" to try again.`,
+            leadVariant: 'error',
+            formHtml,
+            backHref: '/',
+            backLabel: 'Back to dashboard',
+          }),
+        ),
+      )
     }
   })
 
