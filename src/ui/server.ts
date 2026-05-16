@@ -922,6 +922,168 @@ export function renderTrustPanel() {
   </div>`
 }
 
+/**
+ * The focused config form shown in the `config` first-run stage. Deliberately
+ * minimal — only the fields a brand-new owner needs before pairing. The
+ * production server URL is prefilled and tucked into an optional disclosure
+ * so a non-technical owner is not confronted with it.
+ *
+ * P1-1: location is never requested silently. There is an explicit
+ * "Share device location" button with plain-language copy, and a separate
+ * plain "Save and continue" submit that proceeds without location.
+ */
+function renderFirstRunConfigForm(
+  snapshot: ReturnType<AgentRuntime['snapshot']>,
+  configuredServerUrl: string,
+) {
+  const profile = snapshot.profile
+  return `<div class="card">
+    <div class="card-title">Tell us about your shop</div>
+    <p class="muted small" style="margin-bottom:14px; line-height:1.6;">
+      Just two quick details. You can change any of this later from the dashboard.
+    </p>
+    <form method="post" action="/configure" class="stack" id="configure-form">
+      ${hiddenUiToken(snapshot.uiToken)}
+      <input type="hidden" name="latitude" id="configure-location-latitude" />
+      <input type="hidden" name="longitude" id="configure-location-longitude" />
+      <input type="hidden" name="accuracyMeters" id="configure-location-accuracy" />
+      <input type="hidden" name="capturedAt" id="configure-location-captured-at" />
+      <input type="hidden" id="configure-location-attempted" value="true" />
+      <label>
+        <div class="label-text">A name for this PC</div>
+        <input type="text" name="displayName" value="${htmlEscape(snapshot.displayName ?? '')}" placeholder="Counter PC - Front Desk" />
+        <div class="hint">So you can recognise this machine in the admin portal. Optional.</div>
+      </label>
+      <label>
+        <div class="label-text">Your shop address</div>
+        <input type="text" name="reportedBusinessAddress" value="${htmlEscape(snapshot.reportedBusinessAddress ?? profile?.reportedBusinessAddress ?? '')}" placeholder="Shop number, street, city, state" />
+        <div class="hint">The platform admin reviews this when approving your shop.</div>
+      </label>
+
+      <div class="loc-explainer">
+        <div class="step-title" style="font-size:var(--text-base);">Share your shop's location (optional)</div>
+        <p class="muted small" style="margin-top:4px; line-height:1.6;">
+          PrintAnywhere uses your location to show your shop on the customer map, so nearby
+          customers can find you. Your browser will ask for permission — nothing is shared
+          until you click the button below. You can always skip this and add it later.
+        </p>
+        <div class="btn-row" style="margin-top:10px;">
+          <button class="btn btn-secondary" type="button" id="firstrun-location-button">Share device location</button>
+          <span class="muted small" id="firstrun-location-status"></span>
+        </div>
+      </div>
+
+      <details style="margin-top:4px;">
+        <summary><span class="summary-row"><span>Advanced: PrintAnywhere server</span></span></summary>
+        <label style="margin-top:10px;">
+          <div class="label-text">PrintAnywhere server URL</div>
+          <input type="url" name="serverUrl" value="${htmlEscape(configuredServerUrl)}" placeholder="${htmlEscape(defaultPrintAnywhereBackendUrl())}" required />
+          <div class="hint">The production server is already filled in. Change this only if support asks you to.</div>
+        </label>
+      </details>
+
+      <div class="btn-row" style="margin-top:6px;">
+        <button class="btn btn-primary" type="submit">Save and continue</button>
+        <span class="muted small">This connects this PC and creates your pairing code.</span>
+      </div>
+    </form>
+  </div>`
+}
+
+/**
+ * The full guided first-run screen (KAN-37). Renders one of two states:
+ *  - `config`: a welcome, a step list, and the focused config form.
+ *  - `awaiting-pairing`: a welcome, the step list (config done), the hero
+ *    pairing code + QR, the trust panel, and a regenerate-code action.
+ *
+ * Branding, pricing, host location, orders, recent jobs — every operator
+ * card — are deliberately deferred until pairing succeeds (KAN-29 P0-1).
+ */
+export function renderFirstRunScreen(
+  snapshot: ReturnType<AgentRuntime['snapshot']>,
+  firstRun: FirstRunStatus,
+  configuredServerUrl: string,
+) {
+  const awaiting = firstRun.stage === 'awaiting-pairing'
+
+  const steps = [
+    {
+      title: 'Tell us about your shop',
+      text: 'A couple of quick details so the platform admin can recognise this machine.',
+      state: awaiting ? 'is-done' : '',
+    },
+    {
+      title: 'Get your pairing code',
+      text: 'This PC creates a short code (and a QR code) for you to share.',
+      state: awaiting ? '' : 'is-pending',
+    },
+    {
+      title: 'Your admin pairs this PC',
+      text: 'They enter the code in the PrintAnywhere portal. This page updates on its own.',
+      state: 'is-pending',
+    },
+  ]
+
+  const stepList = `<div class="card">
+    <div class="card-title">${awaiting ? 'Final step — share your pairing code' : 'Getting started — 3 quick steps'}</div>
+    <div class="steps">
+      ${steps
+        .map(
+          (step, index) => `<div class="step ${step.state}">
+        <span class="step-num" aria-hidden="true">${step.state === 'is-done' ? '✓' : index + 1}</span>
+        <span class="step-body">
+          <span class="step-title">${htmlEscape(step.title)}</span>
+          <span class="step-text">${htmlEscape(step.text)}</span>
+        </span>
+      </div>`,
+        )
+        .join('')}
+    </div>
+  </div>`
+
+  const welcome = `<div>
+      <div class="page-eyebrow">Welcome to PrintAnywhere</div>
+      <div class="page-title">${awaiting ? 'Almost done — pair this PC' : "Let's set up this PC"}</div>
+    </div>
+    ${stateBanner({
+      variant: 'info',
+      title: awaiting
+        ? 'This PC is registered and waiting to be paired.'
+        : 'This PC is not connected to PrintAnywhere yet.',
+      body: awaiting
+        ? 'Share the pairing code below with your platform admin. Once they pair it, your full dashboard appears here automatically.'
+        : 'PrintAnywhere lets customers send print jobs to your shop. Setup takes about a minute — no technical knowledge needed.',
+    })}`
+
+  if (!awaiting) {
+    return `${welcome}
+      ${stepList}
+      ${renderFirstRunConfigForm(snapshot, configuredServerUrl)}
+      ${renderTrustPanel()}`
+  }
+
+  return `<div id="awaiting-pairing-screen">
+    ${welcome}
+    ${stepList}
+    ${renderPairingHero({
+      pairingCode: firstRun.pairingCode,
+      pairingCodeExpiresAt: firstRun.pairingCodeExpiresAt,
+    })}
+    ${renderTrustPanel()}
+    <div class="card">
+      <div class="card-title">Need a fresh code?</div>
+      <p class="muted small" style="margin-bottom:12px; line-height:1.6;">
+        Pairing codes expire for security. If yours has expired, or your admin asks for a new
+        one, generate a replacement here — the old code stops working immediately.
+      </p>
+      <form method="post" action="/actions/repair">
+        ${hiddenUiToken(snapshot.uiToken)}
+        <button class="btn btn-secondary" type="submit">Generate a new pairing code</button>
+      </form>
+    </div>
+  </div>`
+}
+
 // ---------------------------------------------------------------------------
 // Page shell
 // ---------------------------------------------------------------------------
@@ -1529,6 +1691,18 @@ export async function startUiServer(runtime: AgentRuntime) {
     const hostLocation = snapshot.hostLocation ?? null
     const configuredServerUrl = snapshot.serverUrl ?? defaultPrintAnywhereBackendUrl()
     const isRegistered = !!snapshot.registration?.agentId
+
+    // KAN-37: a brand-new owner should not see ~8 operator cards (pricing in
+    // paise, ICC profile paths, …) before pairing. Branch on the first-run
+    // stage and render a focused, guided pairing screen until pairing is done.
+    const firstRun = computeFirstRunStage(snapshot)
+    if (firstRun.isFirstRun) {
+      const firstRunContent = renderFirstRunScreen(snapshot, firstRun, configuredServerUrl)
+      response.type('html').send(
+        pageShell({ title: 'Set up', activePage: 'dashboard', snapshot, notice, error: errorMessage }, firstRunContent),
+      )
+      return
+    }
 
     const content = `
       <div>

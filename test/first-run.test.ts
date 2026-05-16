@@ -3,10 +3,30 @@ import test from 'node:test'
 import {
   computeFirstRunStage,
   isPairingCodeExpired,
+  renderFirstRunScreen,
   renderPairingHero,
   renderQrSvg,
   renderTrustPanel,
 } from '../src/ui/server.ts'
+
+// Minimal snapshot fixtures — only the fields the first-run screen reads.
+const baseSnapshot = {
+  sharedPrinters: {},
+  printers: [],
+  uiToken: 'ui-token-test',
+} as never
+
+const configSnapshot = { ...(baseSnapshot as object) } as never
+const awaitingSnapshot = {
+  ...(baseSnapshot as object),
+  displayName: 'Counter PC',
+  registration: {
+    agentId: 'agent-1',
+    encryptedAgentSecret: 'x',
+    pairingCode: 'PAIR-4821',
+    pairingCodeExpiresAt: '2030-01-01T00:00:00.000Z',
+  },
+} as never
 
 // --- computeFirstRunStage -------------------------------------------------
 
@@ -179,4 +199,68 @@ test('renderTrustPanel surfaces local-only, encryption and publisher cues', () =
 
 test('renderTrustPanel decorative icons are aria-hidden', () => {
   assert.match(renderTrustPanel(), /trust-icon" aria-hidden="true"/)
+})
+
+// --- renderFirstRunScreen — registration-state branching ------------------
+
+test('config-stage screen shows the focused config form, not the hero code', () => {
+  const status = computeFirstRunStage(configSnapshot)
+  const html = renderFirstRunScreen(configSnapshot, status, 'https://api.example/printanywhere')
+  assert.equal(status.stage, 'config')
+  assert.match(html, /Tell us about your shop/)
+  assert.match(html, /action="\/configure"/)
+  assert.doesNotMatch(html, /pairing-code-big/)
+})
+
+test('config-stage screen defers every operator card until after pairing', () => {
+  const status = computeFirstRunStage(configSnapshot)
+  const html = renderFirstRunScreen(configSnapshot, status, 'https://api.example/printanywhere')
+  // None of the deferred operator cards should appear on the first-run screen.
+  for (const deferred of [
+    'Branding &amp; white-label',
+    'Published platform printers',
+    'Recent jobs',
+    'Ready for pickup',
+    'Host location',
+    'Shared local printers',
+  ]) {
+    assert.doesNotMatch(html, new RegExp(deferred))
+  }
+})
+
+test('config-stage screen explains location permission with an explicit action', () => {
+  const status = computeFirstRunStage(configSnapshot)
+  const html = renderFirstRunScreen(configSnapshot, status, 'https://api.example/printanywhere')
+  assert.match(html, /id="firstrun-location-button"/)
+  assert.match(html, /Share device location/)
+  assert.match(html, /show your shop on the customer map/)
+})
+
+test('awaiting-pairing screen promotes the hero pairing code + QR', () => {
+  const status = computeFirstRunStage(awaitingSnapshot)
+  const html = renderFirstRunScreen(awaitingSnapshot, status, 'https://api.example/printanywhere')
+  assert.equal(status.stage, 'awaiting-pairing')
+  assert.match(html, /pairing-code-big/)
+  assert.match(html, /PAIR-4821/)
+  assert.match(html, /<svg class="pairing-qr"/)
+  assert.match(html, /id="awaiting-pairing-screen"/)
+})
+
+test('awaiting-pairing screen still defers operator cards', () => {
+  const status = computeFirstRunStage(awaitingSnapshot)
+  const html = renderFirstRunScreen(awaitingSnapshot, status, 'https://api.example/printanywhere')
+  assert.doesNotMatch(html, /Published platform printers/)
+  assert.doesNotMatch(html, /Recent jobs/)
+})
+
+test('awaiting-pairing screen offers a regenerate-code action', () => {
+  const status = computeFirstRunStage(awaitingSnapshot)
+  const html = renderFirstRunScreen(awaitingSnapshot, status, 'https://api.example/printanywhere')
+  assert.match(html, /Generate a new pairing code/)
+  assert.match(html, /action="\/actions\/repair"/)
+})
+
+test('first-run screen reuses the KAN-36 stateBanner primitive', () => {
+  const html = renderFirstRunScreen(configSnapshot, computeFirstRunStage(configSnapshot), 'x')
+  assert.match(html, /class="state-banner state-banner-info"/)
 })
