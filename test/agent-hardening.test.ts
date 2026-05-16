@@ -64,6 +64,40 @@ test('AG-M1: a different salt yields a different machine key', () => {
   assert.equal(keyC.toString('hex'), keyD.toString('hex'))
 })
 
+// Mirrors migrateEncryptedMaterial(): walk all three at-rest blobs (RSA private
+// key, agent secret, signing secret), re-encrypt any legacy-key blob under the
+// new key, and confirm every blob is then readable as new-key material — i.e.
+// the install does NOT need to re-pair after the key-derivation change.
+test('AG-M1: all three encrypted blobs survive a legacy->new key migration', () => {
+  const primary = crypto.randomBytes(32)
+  const legacy = crypto.randomBytes(32)
+  const blobs = {
+    encryptedPrivateKeyPem: encryptString('rsa-pem-body', legacy),
+    encryptedAgentSecret: encryptString('agent-secret-body', legacy),
+    encryptedSigningSecret: encryptString('signing-secret-body', legacy),
+  }
+  let changed = false
+  const reEncrypt = (enc: string) => {
+    const { value, usedLegacyKey } = decryptStringMigrating(enc, primary, legacy)
+    if (!usedLegacyKey) return enc
+    changed = true
+    return encryptString(value, primary)
+  }
+  const migrated = {
+    encryptedPrivateKeyPem: reEncrypt(blobs.encryptedPrivateKeyPem),
+    encryptedAgentSecret: reEncrypt(blobs.encryptedAgentSecret),
+    encryptedSigningSecret: reEncrypt(blobs.encryptedSigningSecret),
+  }
+  assert.equal(changed, true, 'legacy blobs must be detected and re-encrypted')
+  assert.equal(decryptString(migrated.encryptedPrivateKeyPem, primary), 'rsa-pem-body')
+  assert.equal(decryptString(migrated.encryptedAgentSecret, primary), 'agent-secret-body')
+  assert.equal(decryptString(migrated.encryptedSigningSecret, primary), 'signing-secret-body')
+  // Already-new material is left untouched (no needless re-encryption / churn).
+  changed = false
+  reEncrypt(encryptString('already-new', primary))
+  assert.equal(changed, false)
+})
+
 // =========================================================================
 // KAN-60 AG-M2 — data dir location + secure file/dir permissions
 // =========================================================================
@@ -141,6 +175,34 @@ test('AG-M2: an existing world-readable state file is tightened to 0600 on load'
   } finally {
     process.env = saved
     fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('AG-M2: migrateLegacyDataDir moves a legacy <cwd>/data install into the new dir', async (t) => {
+  const saved = { ...process.env }
+  const sandbox = path.join(os.tmpdir(), `pa-mig-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`)
+  const legacy = path.join(sandbox, 'data')
+  const target = path.join(sandbox, 'newhome')
+  const originalCwd = process.cwd()
+  try {
+    fs.mkdirSync(legacy, { recursive: true })
+    fs.writeFileSync(path.join(legacy, 'agent-state.json'), '{"sharedPrinters":{},"printers":[],"uiToken":"legacy-tok"}')
+    fs.writeFileSync(path.join(legacy, 'agent-key-salt.bin'), crypto.randomBytes(32))
+    process.chdir(sandbox) // so legacyDataDir() resolves to <sandbox>/data
+    delete process.env.PRINTANYWHERE_AGENT_DATA_DIR
+    const machine = await import(`../src/core/machine.ts?case=migdir-${Date.now()}`)
+    const moved = machine.migrateLegacyDataDir(target)
+    assert.equal(moved, true)
+    assert.ok(fs.existsSync(path.join(target, 'agent-state.json')), 'state file copied')
+    assert.ok(fs.existsSync(path.join(target, 'agent-key-salt.bin')), 'salt file copied')
+    const state = JSON.parse(fs.readFileSync(path.join(target, 'agent-state.json'), 'utf8'))
+    assert.equal(state.uiToken, 'legacy-tok', 'identity preserved through migration')
+    // Idempotent: a second run finds the target already populated and is a no-op.
+    assert.equal(machine.migrateLegacyDataDir(target), false)
+  } finally {
+    process.chdir(originalCwd)
+    process.env = saved
+    fs.rmSync(sandbox, { recursive: true, force: true })
   }
 })
 
