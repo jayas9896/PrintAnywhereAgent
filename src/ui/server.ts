@@ -706,6 +706,58 @@ const SHARED_CSS = `
   .faq-a { color: var(--muted); line-height: 1.6; }
   .faq-a p + p { margin-top: 8px; }
 
+  /* =========================================================================
+   * First-run pairing experience (KAN-37)
+   * -----------------------------------------------------------------------*/
+  /* Step list — the guided "what happens next" sequence. */
+  .steps { display: grid; gap: var(--space-3); counter-reset: step; }
+  .step { display: flex; gap: var(--space-4); align-items: flex-start; }
+  .step-num {
+    flex-shrink: 0; width: 30px; height: 30px; border-radius: 50%;
+    background: var(--brand); color: #fff; font-weight: var(--font-weight-bold);
+    font-size: var(--text-base); display: flex; align-items: center; justify-content: center;
+  }
+  .step.is-done .step-num { background: var(--status-good-fg); }
+  .step.is-pending .step-num { background: var(--border); color: var(--muted); }
+  .step-body { padding-top: 3px; }
+  .step-title { font-weight: var(--font-weight-semibold); font-size: var(--text-md); }
+  .step-text { color: var(--muted); font-size: var(--text-sm); line-height: var(--leading-normal); margin-top: 2px; }
+
+  /* Hero pairing code — the single most important element on the screen. */
+  .pairing-hero {
+    background: var(--brand-light); border: 1px solid var(--status-good-border);
+    border-radius: var(--radius-md); padding: var(--space-6);
+    display: flex; gap: var(--space-6); align-items: center; flex-wrap: wrap;
+  }
+  .pairing-hero-main { flex: 1; min-width: 240px; }
+  .pairing-hero-label { font-size: var(--text-xs); font-weight: var(--font-weight-semibold); letter-spacing: .08em; text-transform: uppercase; color: var(--brand-mid); }
+  .pairing-code-big {
+    font-family: ui-monospace, monospace; font-size: 40px; font-weight: var(--font-weight-bold);
+    letter-spacing: .14em; color: var(--brand); line-height: var(--leading-tight);
+    margin: var(--space-2) 0; word-break: break-all;
+  }
+  .pairing-code-empty { font-size: var(--text-md); color: var(--muted); font-weight: var(--font-weight-medium); margin: var(--space-3) 0; }
+  .pairing-expiry { font-size: var(--text-sm); color: var(--muted); }
+  .pairing-expiry.is-expired { color: var(--status-bad-fg); font-weight: var(--font-weight-semibold); }
+  .pairing-qr-wrap { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); }
+  .pairing-qr { border-radius: var(--radius-sm); background: #fff; border: 1px solid var(--border); padding: var(--space-2); }
+  .pairing-qr-cap { font-size: var(--text-xs); color: var(--muted); }
+  .copy-btn { display: inline-flex; align-items: center; gap: 6px; }
+  .copy-btn .copy-ok { display: none; }
+  .copy-btn.is-copied .copy-ok { display: inline; }
+  .copy-btn.is-copied .copy-idle { display: none; }
+
+  /* Trust panel — first-run legitimacy cues. */
+  .trust-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--space-4); }
+  .trust-item { display: flex; gap: var(--space-3); align-items: flex-start; }
+  .trust-icon { font-size: var(--text-xl); line-height: 1; flex-shrink: 0; }
+  .trust-title { font-weight: var(--font-weight-semibold); font-size: var(--text-base); }
+  .trust-text { color: var(--muted); font-size: var(--text-sm); line-height: var(--leading-normal); margin-top: 2px; }
+
+  /* Location-permission explainer (P1-1). */
+  .loc-explainer { background: var(--surface-alt); border: 1px solid var(--border-light); border-radius: var(--radius-sm); padding: var(--space-4); }
+  @media (max-width: 560px) { .pairing-code-big { font-size: 30px; } }
+
   /* Footer */
   .site-footer { background: var(--brand); color: rgba(255,255,255,.5); font-size: 12px; padding: 14px 24px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-shrink: 0; }
   .site-footer a { color: rgba(255,255,255,.65); text-decoration: none; }
@@ -763,6 +815,110 @@ export function stateBanner(opts: {
       <span class="state-banner-title">${htmlEscape(opts.title)}</span>
       ${opts.body ? `<span class="state-banner-text">${htmlEscape(opts.body)}</span>` : ''}
     </span>
+  </div>`
+}
+
+// ---------------------------------------------------------------------------
+// First-run pairing screen components (KAN-37)
+// ---------------------------------------------------------------------------
+
+/**
+ * The hero pairing-code block: the large, legible code the owner reads out
+ * (or scans) to their platform admin, a Copy-to-clipboard button, an inline
+ * QR code, plain-language sharing copy, and a human-friendly expiry that uses
+ * `formatTimestamp` rather than a raw ISO string (KAN-37 P0-2).
+ *
+ * Exported so the rendering can be unit-tested without an HTTP round-trip.
+ */
+export function renderPairingHero(opts: {
+  pairingCode: string | null
+  pairingCodeExpiresAt: string | null
+  now?: number
+}) {
+  const code = opts.pairingCode
+  const expired = isPairingCodeExpired(opts.pairingCodeExpiresAt, opts.now ?? Date.now())
+
+  if (!code) {
+    return `<div class="pairing-hero">
+      <div class="pairing-hero-main">
+        <div class="pairing-hero-label">Your pairing code</div>
+        <div class="pairing-code-empty">We're generating your pairing code…</div>
+        <div class="pairing-expiry">This usually takes a moment. If it does not appear, use
+          "Generate a pairing code" below.</div>
+      </div>
+    </div>`
+  }
+
+  const expiryLine = expired
+    ? `<div class="pairing-expiry is-expired">This code has expired — generate a new one below before pairing.</div>`
+    : opts.pairingCodeExpiresAt
+      ? `<div class="pairing-expiry">Valid until ${htmlEscape(formatTimestamp(opts.pairingCodeExpiresAt))}. Generate a fresh one any time.</div>`
+      : `<div class="pairing-expiry">Generate a fresh code any time from the button below.</div>`
+
+  return `<div class="pairing-hero">
+    <div class="pairing-hero-main">
+      <div class="pairing-hero-label">Your pairing code</div>
+      <div class="pairing-code-big" id="pairing-code" data-code="${htmlEscape(code)}">${htmlEscape(code)}</div>
+      ${expiryLine}
+      <p class="muted small" style="margin-top:10px; line-height:1.6;">
+        Share this code with your PrintAnywhere platform admin. They enter it in their
+        portal to connect this PC to your shop. You do not need to do anything else here —
+        this page will update on its own once pairing is complete.
+      </p>
+      <div class="btn-row" style="margin-top:12px;">
+        <button type="button" class="btn btn-primary copy-btn" id="pairing-copy-btn"
+          data-copy-target="pairing-code">
+          <span class="copy-idle">Copy code</span>
+          <span class="copy-ok" aria-hidden="true">✔ Copied</span>
+        </button>
+      </div>
+    </div>
+    <div class="pairing-qr-wrap">
+      ${renderQrSvg(code, { size: 168, label: `Pairing code ${code}` })}
+      <span class="pairing-qr-cap">Or scan this with a phone</span>
+    </div>
+  </div>`
+}
+
+/**
+ * The trust panel shown near the pairing code on the first-run screen —
+ * first-run legitimacy / reassurance cues for a non-technical owner
+ * (KAN-37 P1-7): the console is local-only, print jobs are encrypted, and
+ * the publisher is named.
+ */
+export function renderTrustPanel() {
+  const items: Array<{ icon: string; title: string; text: string }> = [
+    {
+      icon: '🔒',
+      title: 'This console is local-only',
+      text: 'This page runs only on this computer. It is not on the public internet — no one outside this PC can open it.',
+    },
+    {
+      icon: '🛡️',
+      title: 'Print jobs are encrypted',
+      text: 'Customer documents are encrypted in transit and only decrypted on this machine, right before they print.',
+    },
+    {
+      icon: '🏢',
+      title: 'Published by Dhruvanta Systems',
+      text: 'PrintAnywhere is built and supported by Dhruvanta Systems. Questions? Contact support@printanywhere.in.',
+    },
+  ]
+  return `<div class="card">
+    <div class="card-title">Why this is safe</div>
+    <div class="trust-grid">
+      ${items
+        .map(
+          (item) => `<div class="trust-item">
+        <span class="trust-icon" aria-hidden="true">${item.icon}</span>
+        <span>
+          <span class="trust-title">${htmlEscape(item.title)}</span>
+          <span class="trust-text">${htmlEscape(item.text)}</span>
+        </span>
+      </div>`,
+        )
+        .join('')}
+    </div>
   </div>`
 }
 
@@ -910,6 +1066,68 @@ const SHARED_SCRIPTS = `<script>
         hostForm.submit();
       });
     });
+  }
+
+  // --- Copy-to-clipboard buttons ------------------------------------------
+  // Any button with data-copy-target="<id>" copies that element's
+  // data-code (or textContent) and briefly shows a "Copied" confirmation.
+  var copyButtons = document.querySelectorAll('[data-copy-target]');
+  for (var ci = 0; ci < copyButtons.length; ci++) {
+    (function (btn) {
+      btn.addEventListener('click', function () {
+        var target = document.getElementById(btn.getAttribute('data-copy-target'));
+        if (!target) return;
+        var text = target.getAttribute('data-code') || target.textContent || '';
+        function confirmCopied() {
+          btn.classList.add('is-copied');
+          setTimeout(function () { btn.classList.remove('is-copied'); }, 2000);
+        }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(confirmCopied, function () {});
+        } else {
+          var ta = document.createElement('textarea');
+          ta.value = text;
+          document.body.appendChild(ta);
+          ta.select();
+          try { document.execCommand('copy'); confirmCopied(); } catch (e) {}
+          document.body.removeChild(ta);
+        }
+      });
+    })(copyButtons[ci]);
+  }
+
+  // --- First-run "Share device location" explicit action -----------------
+  // P1-1: never silently prompt for geolocation. The owner clicks this
+  // button to consciously share, then the form submits with the result.
+  var firstRunLocBtn = document.getElementById('firstrun-location-button');
+  var firstRunLocForm = document.getElementById('configure-form');
+  var firstRunLocStatus = document.getElementById('firstrun-location-status');
+  if (firstRunLocBtn && firstRunLocForm) {
+    firstRunLocBtn.addEventListener('click', function () {
+      firstRunLocBtn.disabled = true;
+      requestBrowserLocation(firstRunLocStatus, function (pos) {
+        writeLocationFields('configure-location', pos);
+        if (firstRunLocStatus) firstRunLocStatus.textContent = 'Location captured. Saving…';
+        firstRunLocForm.submit();
+      }, function () {
+        firstRunLocBtn.disabled = false;
+      });
+    });
+  }
+
+  // --- Auto-refresh the awaiting-pairing screen ---------------------------
+  // While the owner waits for the admin to pair, poll /health and reload
+  // once the agent reports it is registered + self-service enabled so the
+  // full dashboard appears without a manual refresh.
+  if (document.getElementById('awaiting-pairing-screen')) {
+    setInterval(function () {
+      fetch('/health', { cache: 'no-store' })
+        .then(function (res) { return res.ok ? res.json() : null; })
+        .then(function (data) {
+          if (data && data.pairingComplete) window.location.reload();
+        })
+        .catch(function () {});
+    }, 15000);
   }
 
   // --- Persistent header connection pill ----------------------------------
@@ -1274,10 +1492,15 @@ export async function startUiServer(runtime: AgentRuntime) {
     const registered = !!snapshot.registration?.agentId
     const lastHeartbeatAt = snapshot.lastHeartbeatAt ?? null
     const connection = computeConnectionState({ registered, lastHeartbeatAt })
+    const firstRun = computeFirstRunStage(snapshot)
     response.json({
       status: 'UP',
       version: AGENT_VERSION,
       registered,
+      // First-run pairing visibility — the awaiting-pairing screen polls
+      // this to auto-reload once the admin completes pairing (KAN-37).
+      firstRunStage: firstRun.stage,
+      pairingComplete: firstRun.stage === 'paired',
       agentStatus: snapshot.registration?.status ?? null,
       completedToday: snapshot.stats?.completedJobsToday ?? 0,
       failedToday: snapshot.stats?.failedJobsToday ?? 0,

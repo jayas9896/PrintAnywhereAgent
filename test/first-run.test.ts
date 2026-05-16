@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { computeFirstRunStage, isPairingCodeExpired, renderQrSvg } from '../src/ui/server.ts'
+import {
+  computeFirstRunStage,
+  isPairingCodeExpired,
+  renderPairingHero,
+  renderQrSvg,
+  renderTrustPanel,
+} from '../src/ui/server.ts'
 
 // --- computeFirstRunStage -------------------------------------------------
 
@@ -114,4 +120,63 @@ test('renderQrSvg honours a custom pixel size', () => {
 
 test('renderQrSvg encodes different payloads into different matrices', () => {
   assert.notEqual(renderQrSvg('PAIR-0001'), renderQrSvg('PAIR-9999'))
+})
+
+// --- renderPairingHero ----------------------------------------------------
+
+const FUTURE = '2026-05-16T12:00:00.000Z'
+const PAST = '2026-05-16T08:00:00.000Z'
+
+test('renderPairingHero shows the code large and verbatim', () => {
+  const html = renderPairingHero({ pairingCode: 'PAIR-4821', pairingCodeExpiresAt: FUTURE, now: NOW })
+  assert.match(html, /class="pairing-code-big"/)
+  assert.match(html, /PAIR-4821/)
+})
+
+test('renderPairingHero includes a Copy-to-clipboard button targeting the code', () => {
+  const html = renderPairingHero({ pairingCode: 'PAIR-4821', pairingCodeExpiresAt: FUTURE, now: NOW })
+  assert.match(html, /data-copy-target="pairing-code"/)
+  assert.match(html, /Copy code/)
+})
+
+test('renderPairingHero embeds an inline QR code of the pairing code', () => {
+  const html = renderPairingHero({ pairingCode: 'PAIR-4821', pairingCodeExpiresAt: FUTURE, now: NOW })
+  assert.match(html, /<svg class="pairing-qr"/)
+  assert.match(html, /scan this with a phone/)
+})
+
+test('renderPairingHero renders a human-friendly expiry, not a raw ISO string', () => {
+  const html = renderPairingHero({ pairingCode: 'PAIR-4821', pairingCodeExpiresAt: FUTURE, now: NOW })
+  assert.doesNotMatch(html, /2026-05-16T12:00:00/)
+  assert.match(html, /Valid until/)
+})
+
+test('renderPairingHero flags an expired pairing code', () => {
+  const html = renderPairingHero({ pairingCode: 'PAIR-4821', pairingCodeExpiresAt: PAST, now: NOW })
+  assert.match(html, /is-expired/)
+  assert.match(html, /expired/)
+})
+
+test('renderPairingHero shows a generating message when no code exists yet', () => {
+  const html = renderPairingHero({ pairingCode: null, pairingCodeExpiresAt: null })
+  assert.match(html, /generating your pairing code/)
+  assert.doesNotMatch(html, /pairing-code-big/)
+})
+
+test('renderPairingHero includes plain-language sharing instructions', () => {
+  const html = renderPairingHero({ pairingCode: 'PAIR-4821', pairingCodeExpiresAt: FUTURE, now: NOW })
+  assert.match(html, /Share this code with your PrintAnywhere platform admin/)
+})
+
+// --- renderTrustPanel -----------------------------------------------------
+
+test('renderTrustPanel surfaces local-only, encryption and publisher cues', () => {
+  const html = renderTrustPanel()
+  assert.match(html, /local/i)
+  assert.match(html, /encrypted/i)
+  assert.match(html, /Dhruvanta Systems/)
+})
+
+test('renderTrustPanel decorative icons are aria-hidden', () => {
+  assert.match(renderTrustPanel(), /trust-icon" aria-hidden="true"/)
 })
