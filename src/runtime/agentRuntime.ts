@@ -14,8 +14,15 @@ import type {
 } from '../config/types.js'
 import { AgentStore } from '../config/store.js'
 import { AGENT_VERSION, defaultPrintAnywhereBackendUrl } from '../config/defaults.js'
-import { decryptJobPdf, decryptString, encryptString, generateRsaIdentity, hashFile, unwrapJobKey } from '../core/crypto.js'
-import { deriveMachineKey, getMachineId, isWindows } from '../core/machine.js'
+import {
+  decryptJobPdf,
+  decryptStringMigrating,
+  encryptString,
+  generateRsaIdentity,
+  hashFile,
+  unwrapJobKey,
+} from '../core/crypto.js'
+import { deriveLegacyMachineKey, deriveMachineKey, getMachineId, isWindows } from '../core/machine.js'
 import { CloudApiClient } from '../cloud/api.js'
 import { detectHostLocation, normalizeLocationSnapshot } from '../platform/location.js'
 import { discoverPrinters, printPdf } from '../platform/printers.js'
@@ -25,6 +32,8 @@ export class AgentRuntime {
   private state: AgentState = { sharedPrinters: {}, printers: [] }
   private startedAt = Date.now()
   private machineKey!: Buffer
+  /** KAN-60 AG-M1: legacy key, kept only to decrypt material written by older agents. */
+  private legacyMachineKey!: Buffer
   private running = false
   private heartbeatTimer?: NodeJS.Timeout
   private pollPromise?: Promise<void>
@@ -34,8 +43,10 @@ export class AgentRuntime {
   constructor(private readonly store: AgentStore) {}
 
   async start() {
-    this.machineKey = await deriveMachineKey()
+    this.machineKey = await deriveMachineKey(this.store.dataDir)
+    this.legacyMachineKey = await deriveLegacyMachineKey()
     this.state = await this.store.load()
+    await this.migrateEncryptedMaterial()
     await this.ensureIdentity()
     await this.ensureUiToken()
     await this.cleanupTempFiles()
@@ -241,11 +252,19 @@ export class AgentRuntime {
   }
 
   private requireAgentSecret() {
-    return decryptString(this.requireRegistration().encryptedAgentSecret, this.machineKey)
+    return decryptStringMigrating(
+      this.requireRegistration().encryptedAgentSecret,
+      this.machineKey,
+      this.legacyMachineKey,
+    ).value
   }
 
   private requirePrivateKeyPem() {
-    return decryptString(this.requireIdentity().encryptedPrivateKeyPem, this.machineKey)
+    return decryptStringMigrating(
+      this.requireIdentity().encryptedPrivateKeyPem,
+      this.machineKey,
+      this.legacyMachineKey,
+    ).value
   }
 
   private requireClient() {
@@ -257,10 +276,53 @@ export class AgentRuntime {
     const reg = this.state.registration
     if (!reg?.encryptedSigningSecret) return null
     try {
-      return decryptString(reg.encryptedSigningSecret, this.machineKey)
+      return decryptStringMigrating(reg.encryptedSigningSecret, this.machineKey, this.legacyMachineKey).value
     } catch {
       return null
     }
+  }
+
+  /**
+   * KAN-60 AG-M1: on startup, re-encrypt any at-rest material that was written
+   * under the legacy public-identifier-only key so it is stored under the new
+   * salt-derived key. Prevents existing installs from silently re-pairing when
+   * the key-derivation scheme changes.
+   */
+  private async migrateEncryptedMaterial() {
+    let changed = false
+    const reEncrypt = (encrypted: string): string => {
+      const { value, usedLegacyKey } = decryptStringMigrating(
+        encrypted,
+        this.machineKey,
+        this.legacyMachineKey,
+      )
+      if (!usedLegacyKey) return encrypted
+      changed = true
+      return encryptString(value, this.machineKey)
+    }
+    try {
+      if (this.state.identity?.encryptedPrivateKeyPem) {
+        this.state.identity = {
+          ...this.state.identity,
+          encryptedPrivateKeyPem: reEncrypt(this.state.identity.encryptedPrivateKeyPem),
+        }
+      }
+      if (this.state.registration) {
+        const reg = this.state.registration
+        this.state.registration = {
+          ...reg,
+          encryptedAgentSecret: reEncrypt(reg.encryptedAgentSecret),
+          encryptedSigningSecret: reg.encryptedSigningSecret
+            ? reEncrypt(reg.encryptedSigningSecret)
+            : reg.encryptedSigningSecret,
+        }
+      }
+    } catch {
+      // Material is unreadable under both keys — leave it; the agent will
+      // re-register rather than crash.
+      return
+    }
+    if (changed) await this.store.save(this.state)
   }
 
   private async registerIfNeeded(force = false) {
@@ -403,6 +465,42 @@ export class AgentRuntime {
   private async processJob(client: CloudApiClient, job: PollJob) {
     const secret = this.requireAgentSecret()
     this.resetStatsIfNeeded()
+    // KAN-60 AG-M3: the shared-printer set is only a poll filter — the backend
+    // can still name any printer in the job. Before touching the printer (or
+    // even consuming the lease) assert the target is in the shop's shared/
+    // allow-listed set, and fail the job clearly otherwise.
+    const allowError = checkPrinterAllowed(job.printerName, this.state.printers)
+    if (allowError) {
+      this.bumpFailedJobs()
+      await client
+        .updateStatus(secret, job.jobId, {
+          leaseToken: job.leaseToken,
+          status: 'FAILED',
+          printerStatusAfterJob: 'ERROR',
+          failureReason: allowError,
+        })
+        .catch(() => undefined)
+      this.state.lastJob = {
+        jobId: job.jobId,
+        printerName: job.printerName,
+        status: 'FAILED',
+        updatedAt: new Date().toISOString(),
+        failureReason: allowError,
+      }
+      this.pushRecentJob({
+        jobId: job.jobId,
+        printerName: job.printerName,
+        status: 'FAILED',
+        updatedAt: new Date().toISOString(),
+        pickupCode: job.pickup?.code ?? null,
+        displayName: job.pickup?.displayName ?? null,
+        pageCount: job.pickup?.pageCount ?? null,
+        failureReason: allowError,
+      })
+      this.state.lastError = allowError
+      await this.store.save(this.state)
+      return
+    }
     this.bumpActiveJobs(1)
     try {
       await client.updateStatus(secret, job.jobId, {
@@ -627,6 +725,28 @@ export interface PlatformPrinterUpsertInput {
   secureCoverSheetPriceMinor: number
   secureCoverSheetColorName: string
   secureCoverSheetLabel: string
+}
+
+/**
+ * KAN-60 AG-M3: verifies a backend-supplied `job.printerName` targets a printer
+ * that the shop owner has actually marked shared/allow-listed. The shared-printer
+ * set is only used as a poll filter — it is NOT enforced when a job arrives, so
+ * a malicious/buggy backend could name any local printer. Returns a failure
+ * reason string when the printer is not allowed, or `null` when it is allowed.
+ * Pure and exported so it can be unit-tested directly.
+ */
+export function checkPrinterAllowed(printerName: string, printers: LocalPrinter[]): string | null {
+  const target = (printerName ?? '').trim()
+  if (!target) {
+    return 'Print job rejected: the backend did not specify a printer name.'
+  }
+  const allowed = printers.some(
+    (printer) => printer.shared && printer.localPrinterName === target,
+  )
+  if (!allowed) {
+    return `Print job rejected: "${target}" is not in this shop's shared/allow-listed printer set.`
+  }
+  return null
 }
 
 function sleep(ms: number) {

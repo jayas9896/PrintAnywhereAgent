@@ -27,6 +27,27 @@ export function decryptString(encryptedValue: string, machineKey: Buffer) {
   return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8')
 }
 
+/**
+ * KAN-60 AG-M1 migration helper.
+ *
+ * Decrypts a value that may have been encrypted under either the new
+ * salt-derived machine key or the legacy public-identifier-only key. Tries the
+ * primary key first; on an AES-GCM auth failure falls back to the legacy key.
+ * Returns the plaintext plus whether the legacy key was used, so the caller
+ * can re-encrypt and persist under the new key.
+ */
+export function decryptStringMigrating(
+  encryptedValue: string,
+  primaryKey: Buffer,
+  legacyKey: Buffer,
+): { value: string; usedLegacyKey: boolean } {
+  try {
+    return { value: decryptString(encryptedValue, primaryKey), usedLegacyKey: false }
+  } catch {
+    return { value: decryptString(encryptedValue, legacyKey), usedLegacyKey: true }
+  }
+}
+
 export function unwrapJobKey(encryptedJobKeyBase64: string, privateKeyPem: string) {
   return crypto.privateDecrypt(
     {
