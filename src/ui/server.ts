@@ -234,8 +234,35 @@ function statusBadge(status: string) {
 // ---------------------------------------------------------------------------
 
 const SHARED_CSS = `
+  /* =========================================================================
+   * PrintAnywhere Agent UI — Design System
+   * -------------------------------------------------------------------------
+   * All visual styling derives from the design tokens declared in :root below.
+   * When building new UI, reuse the tokens and component classes documented
+   * here instead of hard-coding values — this keeps the operator-facing UI
+   * consistent and lets later tasks build on a stable foundation.
+   *
+   * TOKEN GROUPS
+   *   Colour    --brand / --surface / --border / --text / --muted + status hues
+   *   Spacing   --space-1 (4px) … --space-7 (40px) — a 4px-based scale
+   *   Type      --text-xs … --text-2xl + --font-weight-* + --leading-*
+   *   Radius    --radius-sm / -md / -lg + --radius-pill
+   *   Elevation --shadow / --shadow-sm
+   *
+   * COMPONENT CLASSES (reusable primitives)
+   *   .card .card-title .card-row .subsection      surfaces & grouping
+   *   .stat-card                                   metric tiles
+   *   .badge (+ -good/-bad/-info)                  status pills (icon + colour)
+   *   .btn (+ -primary/-secondary/-danger)         actions
+   *   .alert (+ -success/-error/-info)             transient flash messages
+   *   .state-banner (+ -info/-success/-warning     persistent state primitive
+   *     /-error)                                   (offline, suspended, …)
+   *   .conn-pill (+ -connected/-stale/             header connection indicator
+   *     -disconnected/-unknown)
+   * =======================================================================*/
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   :root {
+    /* Colour */
     --brand: #184d31;
     --brand-light: #eef5f0;
     --brand-mid: #2d7a4f;
@@ -245,10 +272,44 @@ const SHARED_CSS = `
     --border-light: #edf2ee;
     --text: #142018;
     --muted: #5a6e5e;
+    /* Status hues — used by badges, alerts and banners */
+    --status-good-bg: #d8f0e3;     --status-good-fg: #155c31;  --status-good-border: #c0e8ce;
+    --status-bad-bg: #fde7e5;      --status-bad-fg: #8b2d22;   --status-bad-border: #f7c9c4;
+    --status-info-bg: #ddeeff;     --status-info-fg: #1a4e8a;  --status-info-border: #c0d0f0;
+    --status-warn-bg: #fdf0d9;     --status-warn-fg: #8a5a12;  --status-warn-border: #f0d9a8;
+    /* Spacing scale — 4px base. Use these for padding/margin/gap. */
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-5: 20px;
+    --space-6: 24px;
+    --space-7: 40px;
+    /* Typography scale */
+    --text-xs: 12px;
+    --text-sm: 13px;
+    --text-base: 14px;
+    --text-md: 16px;
+    --text-lg: 18px;
+    --text-xl: 22px;
+    --text-2xl: 26px;
+    --font-weight-normal: 400;
+    --font-weight-medium: 500;
+    --font-weight-semibold: 600;
+    --font-weight-bold: 700;
+    --leading-tight: 1.2;
+    --leading-normal: 1.5;
+    --leading-relaxed: 1.6;
+    /* Radius */
     --radius-sm: 8px;
     --radius-md: 14px;
     --radius-lg: 20px;
+    --radius-pill: 999px;
+    /* Elevation */
     --shadow: 0 1px 4px rgba(0,0,0,.06), 0 4px 16px rgba(0,0,0,.04);
+    --shadow-sm: 0 1px 3px rgba(0,0,0,.08);
+    /* Focus ring — see :focus-visible rule below */
+    --focus-ring: #2d7a4f;
   }
   html { font-size: 15px; }
   body { font-family: system-ui, -apple-system, sans-serif; background: #f0f4f1; color: var(--text); min-height: 100vh; display: flex; flex-direction: column; }
@@ -269,23 +330,23 @@ const SHARED_CSS = `
   .site-nav a.active { color: #fff; border-bottom-color: #7ed9a0; }
 
   /* Layout */
-  .page-content { flex: 1; padding: 24px; max-width: 1100px; width: 100%; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
-  .page-title { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
-  .page-eyebrow { font-size: 12px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--brand-mid); margin-bottom: 6px; }
+  .page-content { flex: 1; padding: var(--space-6); max-width: 1100px; width: 100%; margin: 0 auto; display: flex; flex-direction: column; gap: var(--space-5); }
+  .page-title { font-size: var(--text-xl); font-weight: var(--font-weight-bold); margin-bottom: var(--space-1); }
+  .page-eyebrow { font-size: var(--text-xs); font-weight: var(--font-weight-semibold); letter-spacing: .08em; text-transform: uppercase; color: var(--brand-mid); margin-bottom: var(--space-2); }
 
   /* Cards */
-  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 20px; box-shadow: var(--shadow); }
-  .card-title { font-size: 16px; font-weight: 700; margin-bottom: 14px; }
-  .card-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: var(--space-5); box-shadow: var(--shadow); }
+  .card-title { font-size: var(--text-md); font-weight: var(--font-weight-bold); margin-bottom: var(--space-3); }
+  .card-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); margin-bottom: var(--space-3); }
   .card-row:last-child { margin-bottom: 0; }
-  .subsection { border-top: 1px solid var(--border-light); padding-top: 16px; margin-top: 16px; }
-  .subsection-title { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 12px; }
+  .subsection { border-top: 1px solid var(--border-light); padding-top: var(--space-4); margin-top: var(--space-4); }
+  .subsection-title { font-size: var(--text-sm); font-weight: var(--font-weight-bold); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: var(--space-3); }
 
   /* Stats */
-  .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
-  .stat-card { background: var(--surface-alt); border: 1px solid var(--border-light); border-radius: var(--radius-sm); padding: 14px 16px; }
-  .stat-label { font-size: 12px; color: var(--muted); font-weight: 500; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 6px; }
-  .stat-value { font-size: 26px; font-weight: 700; color: var(--brand); line-height: 1; }
+  .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: var(--space-3); }
+  .stat-card { background: var(--surface-alt); border: 1px solid var(--border-light); border-radius: var(--radius-sm); padding: var(--space-3) var(--space-4); }
+  .stat-label { font-size: var(--text-xs); color: var(--muted); font-weight: var(--font-weight-medium); text-transform: uppercase; letter-spacing: .05em; margin-bottom: var(--space-2); }
+  .stat-value { font-size: var(--text-2xl); font-weight: var(--font-weight-bold); color: var(--brand); line-height: var(--leading-tight); }
 
   /* Badges */
   .badge { display: inline-block; border-radius: 999px; background: var(--border); color: var(--muted); padding: 3px 10px; font-size: 12px; font-weight: 600; vertical-align: middle; }
@@ -294,17 +355,27 @@ const SHARED_CSS = `
   .badge-info { background: #ddeeff; color: #1a4e8a; }
 
   /* Forms */
-  form.stack { display: grid; gap: 14px; }
+  form.stack { display: grid; gap: var(--space-3); }
   label { display: block; }
-  .label-text { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 5px; }
+  .label-text { font-size: var(--text-xs); font-weight: var(--font-weight-semibold); color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: var(--space-1); }
   input[type=text], input[type=url], input[type=email], input[type=number], input[type=date], select, textarea {
-    padding: 9px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border); width: 100%; font-size: 14px; color: var(--text); background: #fff; transition: border-color .15s;
+    padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm); border: 1px solid var(--border); width: 100%; font-size: var(--text-base); color: var(--text); background: #fff; transition: border-color .15s;
   }
-  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--brand-mid); }
-  .hint { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  input:focus, select:focus, textarea:focus { border-color: var(--brand-mid); }
+  .hint { font-size: var(--text-xs); color: var(--muted); margin-top: var(--space-1); }
+
+  /* Accessible focus ring — applies to every interactive element that
+   * receives keyboard focus. Mouse clicks do not trigger :focus-visible. */
+  a:focus-visible, button:focus-visible, .btn:focus-visible,
+  input:focus-visible, select:focus-visible, textarea:focus-visible,
+  summary:focus-visible, [tabindex]:focus-visible {
+    outline: 3px solid var(--focus-ring);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
 
   /* Buttons */
-  .btn { display: inline-block; padding: 9px 18px; border: 0; border-radius: 999px; font-size: 14px; font-weight: 600; cursor: pointer; text-decoration: none; transition: opacity .15s; }
+  .btn { display: inline-block; padding: var(--space-2) var(--space-5); border: 0; border-radius: var(--radius-pill); font-size: var(--text-base); font-weight: var(--font-weight-semibold); cursor: pointer; text-decoration: none; transition: opacity .15s; }
   .btn-primary { background: var(--brand); color: #fff; }
   .btn-secondary { background: var(--brand-light); color: var(--brand); }
   .btn-danger { background: #fde7e5; color: #8b2d22; }
