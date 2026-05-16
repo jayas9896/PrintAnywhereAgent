@@ -322,6 +322,126 @@ function statusBadge(status: string) {
 }
 
 // ---------------------------------------------------------------------------
+// Plain-language cloud-error mapping (KAN-40 scope #1 — UX review KAN-29 P1-3)
+// ---------------------------------------------------------------------------
+//
+// Backend failures used to be swallowed into a muted table cell showing raw
+// exception text like "HTTP 503: ..." or "TypeError: fetch failed". A non-
+// technical print-shop owner cannot act on that. mapCloudError translates any
+// thrown error into a reassuring title + body with no stack traces, no
+// exception class names, and no HTTP status codes — paired with a prominent
+// error stateBanner and a Retry action wherever a cloud fetch fails.
+
+export interface FriendlyError {
+  title: string
+  body: string
+}
+
+/**
+ * Pure, testable mapping from any thrown value to operator-facing copy.
+ *
+ * The cloud client throws `Error("HTTP <status>: <body>")` for non-2xx
+ * responses (see api.ts `apiError`) and `fetch` itself throws a `TypeError`
+ * (message "fetch failed", often with an ECONNREFUSED/ENOTFOUND cause) when
+ * the network is unreachable. We classify on the message text — never
+ * surfacing the raw message to the owner.
+ */
+export function mapCloudError(error: unknown): FriendlyError {
+  const raw = error instanceof Error ? error.message : String(error ?? '')
+  const text = raw.toLowerCase()
+  // Include any nested cause code (Node attaches ECONNREFUSED etc. as a cause).
+  const causeCode =
+    error instanceof Error && error.cause && typeof error.cause === 'object'
+      ? String((error.cause as { code?: unknown }).code ?? '').toLowerCase()
+      : ''
+  const haystack = `${text} ${causeCode}`
+
+  // --- Timeout / aborted request ------------------------------------------
+  if (
+    error instanceof Error && error.name === 'AbortError'
+    || haystack.includes('timeout')
+    || haystack.includes('timed out')
+    || haystack.includes('etimedout')
+  ) {
+    return {
+      title: 'PrintAnywhere is slow to respond',
+      body: 'The PrintAnywhere server took too long to answer. It may be busy. Wait a moment, then press Retry.',
+    }
+  }
+
+  // --- Network unreachable (the most common offline case) ------------------
+  if (
+    haystack.includes('fetch failed')
+    || haystack.includes('econnrefused')
+    || haystack.includes('enotfound')
+    || haystack.includes('econnreset')
+    || haystack.includes('eai_again')
+    || haystack.includes('network')
+    || haystack.includes('socket hang up')
+    || (error instanceof TypeError)
+  ) {
+    return {
+      title: 'Cannot reach PrintAnywhere',
+      body: 'This PC could not connect to the PrintAnywhere server. Check this computer’s internet connection, then press Retry.',
+    }
+  }
+
+  // --- Authentication / authorization rejected -----------------------------
+  if (/\bhttp 401\b/.test(text) || /\bhttp 403\b/.test(text)) {
+    return {
+      title: 'PrintAnywhere did not accept this machine',
+      body: 'This PC’s connection to PrintAnywhere was refused. Try generating a new pairing code, or contact your PrintAnywhere admin if it keeps happening.',
+    }
+  }
+
+  // --- Server-side error (5xx) --------------------------------------------
+  if (/\bhttp 5\d\d\b/.test(text)) {
+    return {
+      title: 'PrintAnywhere is having trouble right now',
+      body: 'The PrintAnywhere server reported a problem on its side. This is usually temporary — please wait a moment and press Retry.',
+    }
+  }
+
+  // --- Not found (4xx other than auth) ------------------------------------
+  if (/\bhttp 404\b/.test(text)) {
+    return {
+      title: 'PrintAnywhere could not find that',
+      body: 'The PrintAnywhere server could not find what the agent asked for. Try refreshing — if it persists, contact support.',
+    }
+  }
+
+  if (/\bhttp 4\d\d\b/.test(text)) {
+    return {
+      title: 'PrintAnywhere could not complete that request',
+      body: 'The PrintAnywhere server declined the request. Try refreshing — if it persists, contact support.',
+    }
+  }
+
+  // --- Anything else -------------------------------------------------------
+  return {
+    title: 'Something went wrong talking to PrintAnywhere',
+    body: 'The agent could not complete that just now. Please wait a moment and press Retry. If it keeps happening, contact support.',
+  }
+}
+
+/**
+ * Render the standard, prominent offline / backend-unreachable banner: an
+ * error-variant stateBanner carrying the friendly title + body, followed by
+ * a Retry action. `retryHref` is where the Retry button links (the same page
+ * by default). Used wherever a cloud fetch fails (KAN-40 P1-3).
+ */
+export function renderOfflineBanner(error: unknown, retryHref: string = ''): string {
+  const friendly = mapCloudError(error)
+  const href = retryHref || '.'
+  return `<div id="offline-banner" style="display:flex; flex-direction:column; gap:var(--space-2);">
+    ${stateBanner({ variant: 'error', title: friendly.title, body: friendly.body })}
+    <div class="btn-row">
+      <a class="btn btn-secondary" href="${htmlEscape(href)}">Retry</a>
+    </div>
+  </div>`
+}
+
+// ---------------------------------------------------------------------------
 // Lifecycle / approval banners (KAN-40 scope #3 — UX review KAN-29 P1-8)
 // ---------------------------------------------------------------------------
 //
@@ -387,6 +507,47 @@ export function selectLifecycleBanner(
           'this is a one-time check and usually takes less than a day.',
       }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Coupons gating (KAN-40 scope #5 — UX review KAN-29 P2-5)
+// ---------------------------------------------------------------------------
+//
+// A coupon can only ever discount an order at a platform printer. If the shop
+// has not published a single platform printer yet, the Coupons area is a
+// dead end — the owner can create codes that nothing can redeem. P2-5 asks us
+// to soft-disable Coupons until a platform printer exists, so owners do not
+// hit it prematurely.
+
+export type CouponsGateReason = 'no-platform-printer' | 'not-approved'
+
+export interface CouponsGate {
+  /** True when the Coupons create form should be hidden / soft-disabled. */
+  gated: boolean
+  /** Why it is gated — drives the explanatory copy. Null when not gated. */
+  reason: CouponsGateReason | null
+}
+
+/**
+ * Pure, testable decision for whether the Coupons area is gated.
+ *
+ * Gated when the machine is not yet approved for self-service (it cannot
+ * manage anything customer-facing), OR when it is approved but has not
+ * published a platform printer yet (a coupon would have nothing to apply to).
+ * `not-approved` takes precedence as it is the more fundamental blocker.
+ */
+export function shouldGateCoupons(
+  snapshot: Pick<ReturnType<AgentRuntime['snapshot']>, 'profile' | 'platformPrinters'>,
+): CouponsGate {
+  const selfServiceEnabled = !!snapshot.profile?.selfServiceEnabled
+  if (!selfServiceEnabled) {
+    return { gated: true, reason: 'not-approved' }
+  }
+  const platformPrinters = snapshot.platformPrinters ?? []
+  if (platformPrinters.length === 0) {
+    return { gated: true, reason: 'no-platform-printer' }
+  }
+  return { gated: false, reason: null }
 }
 
 // ---------------------------------------------------------------------------
@@ -778,6 +939,17 @@ const SHARED_CSS = `
   }
   input:focus, select:focus, textarea:focus { border-color: var(--brand-mid); }
   .hint { font-size: var(--text-xs); color: var(--muted); margin-top: var(--space-1); }
+
+  /* Field-level validation error — shown directly beneath the offending
+   * input when a sticky form re-renders after a failed submit (KAN-40 P1-5).
+   * A leading ⚠ glyph carries meaning alongside the colour. */
+  .field-error {
+    font-size: var(--text-xs); font-weight: var(--font-weight-semibold);
+    color: var(--status-bad-fg); margin-top: var(--space-1);
+  }
+  .field-error::before { content: '\\26A0  '; }
+  label.has-error input, label.has-error select, label.has-error textarea,
+  .has-error input, .has-error select { border-color: var(--status-bad-fg); }
 
   /* Rupee-prefixed money input — a ₹ adornment sits inside the field border
    * so a shop owner enters a plain rupee amount (e.g. 15.50) and never sees
@@ -1942,6 +2114,288 @@ function stripNullish(value: Record<string, string | null>) {
 }
 
 // ---------------------------------------------------------------------------
+// Coupons page (KAN-40 — gating P2-5, offline P1-3, sticky form P1-5)
+// ---------------------------------------------------------------------------
+
+/**
+ * The "Create a new coupon" form, sticky-aware: when `sticky.submitted` is
+ * present (a re-render after a failed submit) each field keeps the owner's
+ * typed value and `sticky.fieldErrors` puts a message beside the offender.
+ */
+function renderCouponForm(
+  uiToken: string | null | undefined,
+  platformPrinters: PlatformPrinter[],
+  sticky?: StickyForm,
+) {
+  const printerOptions = platformPrinters
+    .map((p) => {
+      const sel = stickyValue(sticky, 'printerId', '') === p.printerId ? ' selected' : ''
+      return `<option value="${htmlEscape(p.printerId)}"${sel}>${htmlEscape(p.name)}</option>`
+    })
+    .join('')
+  const errClass = (name: string) => (sticky?.fieldErrors?.[name] ? ' has-error' : '')
+  const discountType = stickyValue(sticky, 'discountType', 'PERCENTAGE')
+  const scope = stickyValue(sticky, 'couponScope', 'AGENT')
+  const typeOption = (value: string, label: string) =>
+    `<option value="${value}"${discountType === value ? ' selected' : ''}>${label}</option>`
+  const scopeOption = (value: string, label: string) =>
+    `<option value="${value}"${scope === value ? ' selected' : ''}>${label}</option>`
+
+  return `
+    <div class="card">
+      <div class="card-title">Create a new coupon</div>
+      <form method="post" action="/coupons/create" class="stack">
+        ${hiddenUiToken(uiToken)}
+        <div class="grid-2">
+          <label class="${errClass('code').trim()}">
+            <div class="label-text">Coupon code</div>
+            <input type="text" name="code" value="${htmlEscape(stickyValue(sticky, 'code', ''))}"
+              placeholder="SUMMER20" required style="text-transform:uppercase;" />
+            <div class="hint">Customers type this exactly at checkout. Letters and numbers, no spaces.</div>
+            ${fieldError(sticky, 'code')}
+          </label>
+          <label>
+            <div class="label-text">Display name (optional)</div>
+            <input type="text" name="name" value="${htmlEscape(stickyValue(sticky, 'name', ''))}" placeholder="Summer Sale 20%" />
+          </label>
+          <label>
+            <div class="label-text">Discount type</div>
+            <select name="discountType" required>
+              ${typeOption('PERCENTAGE', 'Percentage off')}
+              ${typeOption('FIXED_AMOUNT', 'Fixed amount off (in paise)')}
+              ${typeOption('PER_PAGE_FIXED', 'Per-page discount (in paise)')}
+            </select>
+          </label>
+          <label class="${errClass('discountValue').trim()}">
+            <div class="label-text">Discount value</div>
+            <input type="number" name="discountValue" min="1" value="${htmlEscape(stickyValue(sticky, 'discountValue', ''))}" placeholder="20" required />
+            <div class="hint">Percentage: a number from 1 to 100. Fixed / per-page: an amount in paise (₹1 = 100 paise).</div>
+            ${fieldError(sticky, 'discountValue')}
+          </label>
+          <label>
+            <div class="label-text">Where it applies</div>
+            <select name="couponScope" id="coupon-scope-select" required>
+              ${scopeOption('AGENT', 'All my printers')}
+              ${scopeOption('PRINTER', 'One specific printer only')}
+            </select>
+          </label>
+          <label id="printer-select-label" class="${errClass('printerId').trim()}">
+            <div class="label-text">Printer (when applying to one printer)</div>
+            <select name="printerId">
+              <option value="">— Select a printer —</option>
+              ${printerOptions}
+            </select>
+            ${fieldError(sticky, 'printerId')}
+          </label>
+          <label>
+            <div class="label-text">Starts on (optional)</div>
+            <input type="date" name="startsAt" value="${htmlEscape(stickyValue(sticky, 'startsAt', ''))}" />
+          </label>
+          <label>
+            <div class="label-text">Ends on (optional)</div>
+            <input type="date" name="expiresAt" value="${htmlEscape(stickyValue(sticky, 'expiresAt', ''))}" />
+          </label>
+          <label>
+            <div class="label-text">Total uses allowed (optional)</div>
+            <input type="number" name="maxUses" min="1" value="${htmlEscape(stickyValue(sticky, 'maxUses', ''))}" placeholder="100" />
+          </label>
+          <label>
+            <div class="label-text">Uses allowed per customer (optional)</div>
+            <input type="number" name="maxUsesPerUser" min="1" value="${htmlEscape(stickyValue(sticky, 'maxUsesPerUser', ''))}" placeholder="1" />
+          </label>
+        </div>
+        <div class="btn-row">
+          <button class="btn btn-primary" type="submit">Create coupon</button>
+        </div>
+      </form>
+    </div>
+    <script>
+      (function() {
+        var scopeSelect = document.getElementById('coupon-scope-select');
+        var printerLabel = document.getElementById('printer-select-label');
+        function updatePrinterVisibility() {
+          if (printerLabel) printerLabel.style.display = scopeSelect && scopeSelect.value === 'PRINTER' ? '' : 'none';
+        }
+        if (scopeSelect) { scopeSelect.addEventListener('change', updatePrinterVisibility); updatePrinterVisibility(); }
+      })();
+    </script>
+  `
+}
+
+/**
+ * Build the full Coupons page content. Reused by GET /coupons and by the
+ * POST /coupons/create handler when a submit fails validation, so the owner's
+ * typed values are preserved (P1-5). Handles the gated state (P2-5) and a
+ * cloud-fetch failure (P1-3) before ever rendering the create form.
+ */
+async function renderCouponsPageContent(
+  runtime: AgentRuntime,
+  snapshot: ReturnType<AgentRuntime['snapshot']>,
+  sticky?: StickyForm,
+): Promise<string> {
+  const platformPrinters = snapshot.platformPrinters ?? []
+  const gate = shouldGateCoupons(snapshot)
+
+  const header = `
+    <div>
+      <div class="page-eyebrow">Promotions</div>
+      <div class="page-title">Coupons</div>
+    </div>`
+
+  // P2-5: soft-disable the whole Coupons workflow until a platform printer
+  // exists — a coupon would have nothing to apply to before then.
+  if (gate.gated) {
+    const gateBody =
+      gate.reason === 'not-approved'
+        ? emptyState({
+            icon: '🔒',
+            title: 'Coupons open up once your shop is approved',
+            text: 'PrintAnywhere is still reviewing this shop. Once it is approved and you have published a printer, you can create discount coupons here.',
+          })
+        : emptyState({
+            icon: '🎟',
+            title: 'Publish a printer first, then create coupons',
+            text: 'Coupons give customers a discount when they print at one of your printers. You have not published a printer yet — set one up on the dashboard, then come back here.',
+            action: `<a class="btn btn-primary" href="/">Go to the dashboard</a>`,
+          })
+    return `
+      ${header}
+      ${stateBanner({
+        variant: 'info',
+        title: 'Coupons are not available yet',
+        body:
+          gate.reason === 'not-approved'
+            ? 'This area unlocks after your shop is approved and has a published printer.'
+            : 'This area unlocks once you publish your first printer.',
+      })}
+      <div class="card">${gateBody}</div>
+    `
+  }
+
+  // Load the coupon list — a cloud failure renders the dedicated offline
+  // banner (P1-3) instead of swallowing raw exception text into a cell.
+  let couponsHtml = ''
+  let couponsLoadError: unknown = null
+  try {
+    const coupons = await runtime.listCoupons()
+    if (coupons.length === 0) {
+      couponsHtml = tableEmptyState({
+        colspan: 7,
+        icon: '🎟',
+        title: 'No coupons created yet',
+        text: 'Use the form below to create your first coupon. Customers can then enter it at checkout for a discount at your printers.',
+      })
+    } else {
+      couponsHtml = coupons
+        .map(
+          (coupon) => `
+        <tr>
+          <td><strong class="mono">${htmlEscape(coupon.code)}</strong>${coupon.name ? `<br/><span class="muted small">${htmlEscape(coupon.name)}</span>` : ''}</td>
+          <td><span class="${coupon.active ? 'badge badge-good' : 'badge badge-bad'}">${coupon.active ? 'Active' : 'Inactive'}</span></td>
+          <td>${htmlEscape(humanizeEnum(coupon.discountType))}<br/><strong>${htmlEscape(formatCouponValue(coupon.discountType, coupon.discountValue))}</strong></td>
+          <td>${htmlEscape(humanizeEnum(coupon.couponScope))}</td>
+          <td class="muted small">${coupon.usedCount} uses${coupon.maxUses ? ` / ${coupon.maxUses}` : ''}</td>
+          <td class="muted small">${htmlEscape(formatTimestamp(coupon.expiresAt, 'No expiry'))}</td>
+          <td>
+            <form method="post" action="/coupons/toggle" class="js-pending-form" style="display:inline;">
+              ${hiddenUiToken(snapshot.uiToken)}
+              <input type="hidden" name="couponId" value="${htmlEscape(coupon.couponId)}" />
+              <input type="hidden" name="active" value="${coupon.active ? 'false' : 'true'}" />
+              <button class="btn btn-secondary" type="submit" style="font-size:12px; padding:5px 10px;"
+                data-pending-text="${coupon.active ? 'Deactivating…' : 'Activating…'}">${coupon.active ? 'Deactivate' : 'Activate'}</button>
+            </form>
+          </td>
+        </tr>
+      `,
+        )
+        .join('')
+    }
+  } catch (error) {
+    couponsLoadError = error
+    couponsHtml = tableEmptyState({
+      colspan: 7,
+      icon: '⚠️',
+      title: 'Your coupons could not be loaded',
+      text: 'The agent could not reach the PrintAnywhere server to fetch your coupons. See the message above and press Retry.',
+    })
+  }
+
+  return `
+    ${header}
+    ${couponsLoadError ? `<div style="margin-bottom:4px;">${renderOfflineBanner(couponsLoadError, '/coupons')}</div>` : ''}
+    <div class="state-banner state-banner-info" role="status">
+      <span class="state-banner-icon" aria-hidden="true">ℹ</span>
+      <span class="state-banner-body">
+        <span class="state-banner-title">Your coupons stay private to your shop</span>
+        <span class="state-banner-text">They are not listed on the customer promotions page. A customer who knows the code can type it at checkout, and it is checked automatically at your printer.</span>
+      </span>
+    </div>
+    <div class="card">
+      <div class="card-title">Your coupons</div>
+      <table class="data-table">
+        <thead><tr><th>Code</th><th>Status</th><th>Discount</th><th>Applies to</th><th>Usage</th><th>Ends</th><th>Action</th></tr></thead>
+        <tbody>${couponsHtml}</tbody>
+      </table>
+    </div>
+    ${renderCouponForm(snapshot.uiToken, platformPrinters, sticky)}
+  `
+}
+
+// ---------------------------------------------------------------------------
+// Sticky-form value helper (KAN-40 scope #2 — UX review KAN-29 P1-5)
+// ---------------------------------------------------------------------------
+//
+// On a validation error the forms used to redirect back to a snapshot,
+// discarding everything the owner typed (painful on the ~12-field publish /
+// config forms). The fix: on failure the POST handler re-renders the same
+// page in-process, passing the submitted body + per-field error messages so
+// each input keeps its value and shows its own error.
+
+export interface StickyForm {
+  /** The raw submitted body to prefer over stored values, when re-rendering. */
+  submitted?: Record<string, unknown> | null
+  /** Field-name -> plain-language error message, shown beside that field. */
+  fieldErrors?: Record<string, string> | null
+}
+
+/**
+ * Read a string field for a sticky re-render: prefer the owner's submitted
+ * value, falling back to the stored/default value. Exported for testing.
+ */
+export function stickyValue(
+  sticky: StickyForm | null | undefined,
+  name: string,
+  fallback: string | null | undefined,
+): string {
+  const submitted = sticky?.submitted
+  if (submitted && Object.prototype.hasOwnProperty.call(submitted, name)) {
+    const value = submitted[name]
+    if (value != null) return String(value)
+  }
+  return fallback ?? ''
+}
+
+/** True when the owner ticked a checkbox in the submitted body. */
+export function stickyChecked(
+  sticky: StickyForm | null | undefined,
+  name: string,
+  fallback: boolean,
+): boolean {
+  const submitted = sticky?.submitted
+  if (submitted && Object.prototype.hasOwnProperty.call(submitted, name)) {
+    return String(submitted[name] ?? '') === 'on'
+  }
+  return fallback
+}
+
+/** Render an inline field-level error message, or '' when the field is OK. */
+export function fieldError(sticky: StickyForm | null | undefined, name: string): string {
+  const message = sticky?.fieldErrors?.[name]
+  if (!message) return ''
+  return `<div class="field-error" role="alert">${htmlEscape(message)}</div>`
+}
+
+// ---------------------------------------------------------------------------
 // Route server
 // ---------------------------------------------------------------------------
 
@@ -2423,7 +2877,10 @@ export async function startUiServer(runtime: AgentRuntime) {
 
     let ordersHtml = ''
     let orderCount = 0
-    let loadError: string | null = null
+    // KAN-40 P1-3: a backend failure is no longer swallowed into a muted cell
+    // of raw exception text. `loadError` holds the raw thrown value so the
+    // page can render the dedicated offline banner via mapCloudError.
+    let loadError: unknown = null
     try {
       const orders = await runtime.listOrders()
       orderCount = orders.length
@@ -2452,12 +2909,12 @@ export async function startUiServer(runtime: AgentRuntime) {
         `).join('')
       }
     } catch (error) {
-      loadError = error instanceof Error ? error.message : 'Could not load orders'
+      loadError = error
       ordersHtml = tableEmptyState({
         colspan: 7,
         icon: '⚠️',
         title: 'The orders list could not be loaded',
-        text: 'The agent could not reach the PrintAnywhere server to fetch your orders. Check your connection and try refreshing.',
+        text: 'The agent could not reach the PrintAnywhere server to fetch your orders. See the message above and press Retry.',
       })
     }
 
@@ -2473,11 +2930,7 @@ export async function startUiServer(runtime: AgentRuntime) {
         </form>
       </div>
       ${loadError
-        ? `<div style="margin-bottom:14px;">${stateBanner({
-            variant: 'warning',
-            title: 'Showing the latest available data',
-            body: loadError,
-          })}</div>`
+        ? `<div style="margin-bottom:14px;">${renderOfflineBanner(loadError, '/orders')}</div>`
         : ''}
       <div class="card">
         <div class="card-row">
@@ -2502,131 +2955,7 @@ export async function startUiServer(runtime: AgentRuntime) {
     const snapshot = runtime.snapshot()
     const notice = typeof request.query.notice === 'string' ? request.query.notice : null
     const errorMessage = typeof request.query.error === 'string' ? request.query.error : null
-    const platformPrinters = snapshot.platformPrinters ?? []
-
-    let couponsHtml = ''
-    try {
-      const coupons = await runtime.listCoupons()
-      if (coupons.length === 0) {
-        couponsHtml = `<tr><td colspan="7" class="muted">No coupons created yet. Use the form below to create your first coupon.</td></tr>`
-      } else {
-        couponsHtml = coupons.map((coupon) => `
-          <tr>
-            <td><strong class="mono">${htmlEscape(coupon.code)}</strong>${coupon.name ? `<br/><span class="muted small">${htmlEscape(coupon.name)}</span>` : ''}</td>
-            <td><span class="${coupon.active ? 'badge badge-good' : 'badge badge-bad'}">${coupon.active ? 'Active' : 'Inactive'}</span></td>
-            <td>${htmlEscape(humanizeEnum(coupon.discountType))}<br/><strong>${htmlEscape(formatCouponValue(coupon.discountType, coupon.discountValue))}</strong></td>
-            <td>${htmlEscape(humanizeEnum(coupon.couponScope))}</td>
-            <td class="muted small">${coupon.usedCount} uses${coupon.maxUses ? ` / ${coupon.maxUses}` : ''}</td>
-            <td class="muted small">${htmlEscape(formatTimestamp(coupon.expiresAt, 'No expiry'))}</td>
-            <td>
-              <form method="post" action="/coupons/toggle" style="display:inline;">
-                ${hiddenUiToken(snapshot.uiToken)}
-                <input type="hidden" name="couponId" value="${htmlEscape(coupon.couponId)}" />
-                <input type="hidden" name="active" value="${coupon.active ? 'false' : 'true'}" />
-                <button class="btn btn-secondary" type="submit" style="font-size:12px; padding:5px 10px;">${coupon.active ? 'Deactivate' : 'Activate'}</button>
-              </form>
-            </td>
-          </tr>
-        `).join('')
-      }
-    } catch (error) {
-      couponsHtml = `<tr><td colspan="7" class="muted">${htmlEscape(error instanceof Error ? error.message : 'Could not load coupons')}</td></tr>`
-    }
-
-    const printerOptions = platformPrinters.map(
-      (p) => `<option value="${htmlEscape(p.printerId)}">${htmlEscape(p.name)}</option>`,
-    ).join('')
-
-    const content = `
-      <div>
-        <div class="page-eyebrow">Promotions</div>
-        <div class="page-title">Coupons</div>
-      </div>
-      <div class="alert alert-info">
-        Agent and printer coupons are <strong>not shown</strong> on the customer promo preview list. Customers can enter them manually at checkout — they are validated automatically at your printer.
-      </div>
-      <div class="card">
-        <div class="card-title">Your coupons</div>
-        <table class="data-table">
-          <thead><tr><th>Code</th><th>Status</th><th>Discount</th><th>Scope</th><th>Usage</th><th>Expires</th><th>Action</th></tr></thead>
-          <tbody>${couponsHtml}</tbody>
-        </table>
-      </div>
-      <div class="card">
-        <div class="card-title">Create a new coupon</div>
-        <form method="post" action="/coupons/create" class="stack">
-          ${hiddenUiToken(snapshot.uiToken)}
-          <div class="grid-2">
-            <label>
-              <div class="label-text">Coupon code</div>
-              <input type="text" name="code" placeholder="SUMMER20" required style="text-transform:uppercase;" />
-              <div class="hint">Customers enter this exactly. Alphanumeric, no spaces recommended.</div>
-            </label>
-            <label>
-              <div class="label-text">Display name (optional)</div>
-              <input type="text" name="name" placeholder="Summer Sale 20%" />
-            </label>
-            <label>
-              <div class="label-text">Discount type</div>
-              <select name="discountType" required>
-                <option value="PERCENTAGE">Percentage off</option>
-                <option value="FIXED_AMOUNT">Fixed amount off (paise)</option>
-                <option value="PER_PAGE_FIXED">Per-page discount (paise)</option>
-              </select>
-            </label>
-            <label>
-              <div class="label-text">Discount value</div>
-              <input type="number" name="discountValue" min="1" placeholder="20" required />
-              <div class="hint">For percentage: 1–100. For fixed/per-page: amount in paise (₹1 = 100 paise).</div>
-            </label>
-            <label>
-              <div class="label-text">Scope</div>
-              <select name="couponScope" id="coupon-scope-select" required>
-                <option value="AGENT">All my printers (Agent scope)</option>
-                <option value="PRINTER">Specific printer only</option>
-              </select>
-            </label>
-            <label id="printer-select-label">
-              <div class="label-text">Printer (for Printer scope)</div>
-              <select name="printerId">
-                <option value="">— Select printer —</option>
-                ${printerOptions}
-              </select>
-            </label>
-            <label>
-              <div class="label-text">Starts at (optional)</div>
-              <input type="date" name="startsAt" />
-            </label>
-            <label>
-              <div class="label-text">Expires at (optional)</div>
-              <input type="date" name="expiresAt" />
-            </label>
-            <label>
-              <div class="label-text">Max total uses (optional)</div>
-              <input type="number" name="maxUses" min="1" placeholder="100" />
-            </label>
-            <label>
-              <div class="label-text">Max uses per customer (optional)</div>
-              <input type="number" name="maxUsesPerUser" min="1" placeholder="1" />
-            </label>
-          </div>
-          <div class="btn-row">
-            <button class="btn btn-primary" type="submit">Create coupon</button>
-          </div>
-        </form>
-      </div>
-      <script>
-        (function() {
-          var scopeSelect = document.getElementById('coupon-scope-select');
-          var printerLabel = document.getElementById('printer-select-label');
-          function updatePrinterVisibility() {
-            if (printerLabel) printerLabel.style.display = scopeSelect && scopeSelect.value === 'PRINTER' ? '' : 'none';
-          }
-          if (scopeSelect) { scopeSelect.addEventListener('change', updatePrinterVisibility); updatePrinterVisibility(); }
-        })();
-      </script>
-    `
-
+    const content = await renderCouponsPageContent(runtime, snapshot)
     response.type('html').send(pageShell({ title: 'Coupons', activePage: 'coupons', snapshot, notice, error: errorMessage }, content))
   })
 
@@ -3052,27 +3381,43 @@ export async function startUiServer(runtime: AgentRuntime) {
 
   app.post('/coupons/create', async (request, response) => {
     if (!verifyUiRequest(runtime, request, response)) return
+    const body = request.body as Record<string, unknown>
+    const snapshot = runtime.snapshot()
+
+    // KAN-40 P1-5: validate all fields up-front and collect every error so the
+    // form can re-render in-process with the owner's typed values preserved.
+    const { payload, errors } = validateCouponPayload(body)
+    if (!payload) {
+      const content = await renderCouponsPageContent(runtime, snapshot, { submitted: body, fieldErrors: errors })
+      response
+        .status(400)
+        .type('html')
+        .send(
+          pageShell(
+            { title: 'Coupons', activePage: 'coupons', snapshot, error: 'Please fix the highlighted fields and try again.' },
+            content,
+          ),
+        )
+      return
+    }
+
     try {
-      const body = request.body as Record<string, unknown>
-      const scope = String(body.couponScope ?? 'AGENT')
-      const printerId = scope === 'PRINTER' ? parseOptionalTrimmed(body, 'printerId') : null
-      const payload: AgentCouponUpsertPayload = {
-        code: parseRequiredText(body, 'code').toUpperCase(),
-        name: parseOptionalTrimmed(body, 'name'),
-        discountType: parseRequiredText(body, 'discountType'),
-        discountValue: parseRequiredNumber(body, 'discountValue'),
-        active: true,
-        startsAt: startsAtIso(parseOptionalTrimmed(body, 'startsAt')),
-        expiresAt: expiresAtIso(parseOptionalTrimmed(body, 'expiresAt')),
-        maxUses: parseOptionalInt(body, 'maxUses'),
-        maxUsesPerUser: parseOptionalInt(body, 'maxUsesPerUser'),
-        couponScope: scope as 'AGENT' | 'PRINTER',
-        printerId,
-      }
       await runtime.createCoupon(payload)
       redirectTo(response, '/coupons', 'notice', 'Coupon created successfully.')
     } catch (error) {
-      redirectTo(response, '/coupons', 'error', error instanceof Error ? error.message : 'Could not create coupon')
+      // A cloud-side failure (not a form error): re-render sticky so the
+      // owner's input survives, and show the friendly offline message.
+      const friendly = mapCloudError(error)
+      const content = await renderCouponsPageContent(runtime, snapshot, { submitted: body })
+      response
+        .status(502)
+        .type('html')
+        .send(
+          pageShell(
+            { title: 'Coupons', activePage: 'coupons', snapshot, error: `${friendly.title}. ${friendly.body}` },
+            content,
+          ),
+        )
     }
   })
 
@@ -3113,6 +3458,65 @@ function formatCouponValue(discountType: string, value: number) {
     case 'FIXED_AMOUNT': return formatMinor(value)
     case 'PER_PAGE_FIXED': return `${formatMinor(value)}/page`
     default: return String(value)
+  }
+}
+
+/**
+ * Validate a submitted coupon body, collecting ALL field errors at once
+ * (KAN-40 P1-5) rather than throwing on the first one. Returns the built
+ * payload when valid, or `{ payload: null, errors }` keyed by field name.
+ * Exported so the validation contract can be unit-tested directly.
+ */
+export function validateCouponPayload(body: Record<string, unknown>): {
+  payload: AgentCouponUpsertPayload | null
+  errors: Record<string, string>
+} {
+  const errors: Record<string, string> = {}
+
+  const code = String(body.code ?? '').trim().toUpperCase()
+  if (!code) errors.code = 'Enter a coupon code customers will type at checkout.'
+  else if (/\s/.test(code)) errors.code = 'A coupon code cannot contain spaces.'
+
+  const discountType = String(body.discountType ?? '').trim()
+  if (!['PERCENTAGE', 'FIXED_AMOUNT', 'PER_PAGE_FIXED'].includes(discountType)) {
+    errors.discountType = 'Choose a discount type.'
+  }
+
+  const discountRaw = String(body.discountValue ?? '').trim()
+  const discountValue = Number(discountRaw)
+  if (!discountRaw) {
+    errors.discountValue = 'Enter how big the discount is.'
+  } else if (!Number.isFinite(discountValue) || discountValue <= 0) {
+    errors.discountValue = 'The discount must be a number greater than zero.'
+  } else if (discountType === 'PERCENTAGE' && discountValue > 100) {
+    errors.discountValue = 'A percentage discount cannot be more than 100.'
+  }
+
+  const scope = String(body.couponScope ?? 'AGENT').trim() || 'AGENT'
+  const printerId = scope === 'PRINTER' ? (String(body.printerId ?? '').trim() || null) : null
+  if (scope === 'PRINTER' && !printerId) {
+    errors.printerId = 'Choose which printer this coupon applies to.'
+  }
+
+  if (Object.keys(errors).length > 0) {
+    return { payload: null, errors }
+  }
+
+  return {
+    payload: {
+      code,
+      name: parseOptionalTrimmed(body, 'name'),
+      discountType,
+      discountValue,
+      active: true,
+      startsAt: startsAtIso(parseOptionalTrimmed(body, 'startsAt')),
+      expiresAt: expiresAtIso(parseOptionalTrimmed(body, 'expiresAt')),
+      maxUses: parseOptionalInt(body, 'maxUses'),
+      maxUsesPerUser: parseOptionalInt(body, 'maxUsesPerUser'),
+      couponScope: scope as 'AGENT' | 'PRINTER',
+      printerId,
+    },
+    errors,
   }
 }
 
