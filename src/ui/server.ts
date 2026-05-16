@@ -90,13 +90,6 @@ function parseRequiredText(body: Record<string, unknown>, key: string) {
   return value
 }
 
-function parseRequiredNumber(body: Record<string, unknown>, key: string) {
-  const value = String(body[key] ?? '').trim()
-  const parsed = Number(value)
-  if (!Number.isFinite(parsed)) throw new Error(`${humanizeKey(key)} must be a valid number.`)
-  return parsed
-}
-
 function parseOptionalTrimmed(body: Record<string, unknown>, key: string) {
   const value = String(body[key] ?? '').trim()
   return value || null
@@ -252,33 +245,10 @@ function findPricingAdjustment(printer: PlatformPrinter | null | undefined, type
 }
 
 /**
- * Render a labelled rupee money field. The owner types a plain rupee amount
- * (with a ₹ adornment); the value is converted to paise on submit via
- * parseRupeesToPaise. `paiseValue` is the stored paise value to prefill.
- */
-function moneyField(opts: {
-  name: string
-  label: string
-  paiseValue: number | null | undefined
-  spanClass?: string
-}) {
-  const span = opts.spanClass ? ` ${opts.spanClass}` : ''
-  return `
-    <label class="${span.trim()}">
-      <div class="label-text">${htmlEscape(opts.label)}</div>
-      <div class="money-input">
-        <input type="number" step="0.01" min="0" inputmode="decimal"
-          name="${htmlEscape(opts.name)}" value="${htmlEscape(paiseToRupeeInput(opts.paiseValue))}" />
-      </div>
-    </label>
-  `
-}
-
-/**
- * Render an OPTIONAL rupee money field for the Advanced sections. Unlike
- * moneyField, an empty stored value renders as an empty input (the rule is
- * disabled) rather than "0.00". `storedPaise` is the raw paise string held
- * in the constraint configuration, or '' / undefined when unset.
+ * Render an OPTIONAL rupee money field for the Advanced sections. An empty
+ * stored value renders as an empty input (the rule is disabled) rather than
+ * "0.00". `storedPaise` is the raw paise string held in the constraint
+ * configuration, or '' / undefined when unset.
  */
 function optionalMoneyField(opts: { name: string; label: string; storedPaise: unknown }) {
   const raw = String(opts.storedPaise ?? '').trim()
