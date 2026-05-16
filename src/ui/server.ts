@@ -424,6 +424,32 @@ const SHARED_CSS = `
   .site-header-biz { display: flex; align-items: center; gap: 8px; }
   .site-header-biz img.biz-logo { height: 26px; width: auto; border-radius: 4px; }
   .site-header-biz .biz-name { color: rgba(255,255,255,.88); font-size: 13px; font-weight: 600; }
+  .site-header-spacer { flex: 1; }
+
+  /* Connection pill — persistent header indicator shown on every page.
+   * Auto-refreshed by a client-side poll of /health. State is conveyed by
+   * a dot shape + label text, not colour alone. See connectionPill() and
+   * the polling script for behaviour. */
+  .conn-pill {
+    display: inline-flex; align-items: center; gap: var(--space-2);
+    padding: 5px 12px 5px 10px; border-radius: var(--radius-pill);
+    font-size: var(--text-xs); font-weight: var(--font-weight-semibold);
+    background: rgba(255,255,255,.12); color: #fff; white-space: nowrap;
+    cursor: default;
+  }
+  .conn-pill-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; background: currentColor; }
+  .conn-pill-label { letter-spacing: .01em; }
+  .conn-pill-sync { font-weight: var(--font-weight-normal); opacity: .8; font-size: 11px; }
+  /* Variants — explicit background + a distinct dot treatment per state. */
+  .conn-pill-connected { background: rgba(126,217,160,.22); color: #d6f5e2; }
+  .conn-pill-stale { background: rgba(240,201,120,.26); color: #ffe6b0; }
+  .conn-pill-stale .conn-pill-dot { box-shadow: 0 0 0 3px rgba(240,201,120,.3); }
+  .conn-pill-disconnected { background: rgba(247,150,140,.26); color: #ffd4cd; }
+  .conn-pill-disconnected .conn-pill-dot { border-radius: 2px; }
+  .conn-pill-unregistered { background: rgba(255,255,255,.14); color: rgba(255,255,255,.85); }
+  .conn-pill-unregistered .conn-pill-dot { background: transparent; border: 2px solid currentColor; }
+  @media (max-width: 560px) { .conn-pill-sync { display: none; } }
+
   .site-nav { background: var(--brand); border-top: 1px solid rgba(255,255,255,.08); padding: 0 24px; display: flex; gap: 0; flex-shrink: 0; }
   .site-nav a { color: rgba(255,255,255,.65); text-decoration: none; padding: 10px 16px; font-size: 13px; font-weight: 500; border-bottom: 2px solid transparent; transition: color .15s, border-color .15s; }
   .site-nav a:hover { color: rgba(255,255,255,.9); }
@@ -574,6 +600,60 @@ const SHARED_CSS = `
 `
 
 // ---------------------------------------------------------------------------
+// Connection pill + state banner (shell components)
+// ---------------------------------------------------------------------------
+
+/**
+ * Render the persistent header connection indicator. Server-renders the
+ * current state so the pill is correct on first paint; the client-side
+ * poll in SHARED_SCRIPTS then keeps it live. The data-* attributes and
+ * element IDs are the contract the polling script updates against.
+ */
+function connectionPill(status: ConnectionStatus) {
+  const syncText =
+    status.state === 'unregistered'
+      ? 'Pair this machine to connect'
+      : status.ageSeconds == null
+        ? status.detail
+        : status.detail
+  return `<span id="conn-pill" class="conn-pill conn-pill-${status.state}"
+    role="status" aria-live="polite" title="${htmlEscape(status.detail)}"
+    data-state="${status.state}">
+    <span class="conn-pill-dot" aria-hidden="true"></span>
+    <span class="conn-pill-label" id="conn-pill-label">${htmlEscape(status.label)}</span>
+    <span class="conn-pill-sync" id="conn-pill-sync">${htmlEscape(syncText)}</span>
+  </span>`
+}
+
+/**
+ * Reusable persistent state-banner primitive. Unlike the transient
+ * `.alert` flash messages, this communicates a standing condition and is
+ * rendered conditionally by pages (offline, pending approval, suspended,
+ * revoked, …). Later KAN-3x tasks reuse this — keep the variant set stable.
+ */
+export function stateBanner(opts: {
+  variant: 'info' | 'success' | 'warning' | 'error'
+  title: string
+  body?: string | null
+}) {
+  const icons: Record<typeof opts.variant, string> = {
+    info: 'ℹ',
+    success: '✔',
+    warning: '⚠',
+    error: '✕',
+  }
+  const role = opts.variant === 'error' ? 'alert' : 'status'
+  const live = opts.variant === 'error' ? 'assertive' : 'polite'
+  return `<div class="state-banner state-banner-${opts.variant}" role="${role}" aria-live="${live}">
+    <span class="state-banner-icon" aria-hidden="true">${icons[opts.variant]}</span>
+    <span class="state-banner-body">
+      <span class="state-banner-title">${htmlEscape(opts.title)}</span>
+      ${opts.body ? `<span class="state-banner-text">${htmlEscape(opts.body)}</span>` : ''}
+    </span>
+  </div>`
+}
+
+// ---------------------------------------------------------------------------
 // Page shell
 // ---------------------------------------------------------------------------
 
@@ -590,6 +670,10 @@ function pageShell(
   const { title, activePage, snapshot, notice, error } = opts
   const brandName = snapshot.brandName?.trim() || null
   const brandLogoUrl = snapshot.brandLogoUrl?.trim() || null
+  const connection = computeConnectionState({
+    registered: !!snapshot.registration?.agentId,
+    lastHeartbeatAt: snapshot.lastHeartbeatAt ?? null,
+  })
 
   const bizBranding =
     brandName || brandLogoUrl
@@ -629,6 +713,8 @@ function pageShell(
       </span>
     </a>
     ${bizBranding}
+    <span class="site-header-spacer"></span>
+    ${connectionPill(connection)}
   </header>
   <nav class="site-nav">
     ${navLinks.map((link) => `<a href="${link.href}"${activePage === link.id ? ' class="active"' : ''}>${link.label}</a>`).join('')}
@@ -712,6 +798,48 @@ const SHARED_SCRIPTS = `<script>
       });
     });
   }
+
+  // --- Persistent header connection pill ----------------------------------
+  // Polls /health every 20s and reflects the computed connection state.
+  // /health returns a server-computed { connection } object; if the agent
+  // process itself is unreachable, the fetch fails and we show "Offline".
+  (function () {
+    var pill = document.getElementById('conn-pill');
+    if (!pill) return;
+    var labelEl = document.getElementById('conn-pill-label');
+    var syncEl = document.getElementById('conn-pill-sync');
+    var STATES = ['connected', 'stale', 'disconnected', 'unregistered'];
+
+    function applyState(state, label, sync) {
+      for (var i = 0; i < STATES.length; i++) pill.classList.remove('conn-pill-' + STATES[i]);
+      pill.classList.add('conn-pill-' + state);
+      pill.setAttribute('data-state', state);
+      if (labelEl) labelEl.textContent = label;
+      if (syncEl) syncEl.textContent = sync;
+      pill.setAttribute('title', sync);
+    }
+
+    function poll() {
+      fetch('/health', { cache: 'no-store' })
+        .then(function (res) { return res.ok ? res.json() : Promise.reject(new Error('bad status')); })
+        .then(function (data) {
+          var c = data && data.connection;
+          if (!c || !c.state) return;
+          var sync = c.state === 'unregistered' ? 'Pair this machine to connect' : c.detail;
+          applyState(c.state, c.label, sync);
+        })
+        .catch(function () {
+          // The agent service is not answering at all — strongest signal.
+          applyState('disconnected', 'Agent offline', 'Cannot reach the agent service on this PC.');
+        });
+    }
+
+    poll();
+    setInterval(poll, 20000);
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'visible') poll();
+    });
+  })();
 })();
 </script>`
 
