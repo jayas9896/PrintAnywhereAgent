@@ -7,12 +7,14 @@ import type {
   AgentApprovalStatus,
   AgentLocationSnapshot,
   ConfiguredConstraint,
+  PickupJobSnapshot,
   PlatformColorMode,
   PlatformPageSize,
   PlatformPrinter,
   PlatformPrinterStatus,
   PlatformScalingMode,
   PlatformSidesMode,
+  RecentJobSnapshot,
 } from '../config/types.js'
 import type { AgentCouponUpsertPayload } from '../cloud/api.js'
 import { AGENT_VERSION, defaultPrintAnywhereBackendUrl } from '../config/defaults.js'
@@ -666,6 +668,9 @@ const SHARED_CSS = `
   .card-title { font-size: var(--text-md); font-weight: var(--font-weight-bold); margin-bottom: var(--space-3); }
   .card-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); margin-bottom: var(--space-3); }
   .card-row:last-child { margin-bottom: 0; }
+  /* Inline "View all …" affordance linking a preview card to its full page. */
+  .card-link { font-size: var(--text-sm); font-weight: var(--font-weight-semibold); color: var(--brand); text-decoration: none; white-space: nowrap; flex-shrink: 0; }
+  .card-link:hover { text-decoration: underline; }
   .subsection { border-top: 1px solid var(--border-light); padding-top: var(--space-4); margin-top: var(--space-4); }
   .subsection-title { font-size: var(--text-sm); font-weight: var(--font-weight-bold); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: var(--space-3); }
 
@@ -965,6 +970,65 @@ export function tableEmptyState(opts: {
     text: opts.text,
     action: opts.action,
   })}</td></tr>`
+}
+
+// ---------------------------------------------------------------------------
+// Job monitoring & pickup workflow (KAN-39 — UX review KAN-29 theme 5)
+// ---------------------------------------------------------------------------
+
+/** How many jobs the dashboard recent-activity preview shows at most. */
+export const RECENT_JOBS_PREVIEW_LIMIT = 5
+
+/**
+ * Pure slicing helper for the dashboard recent-activity preview (KAN-39 P2-1).
+ *
+ * The dashboard "Recent jobs" card used to render the full local job cache,
+ * duplicating the authoritative `/orders` page. It now shows only the latest
+ * few items. `recentJobs` is already stored newest-first by the runtime
+ * (`pushRecentJob` prepends), so this just takes the leading slice while
+ * preserving order. Exported so the slicing rule can be unit-tested without
+ * an HTTP round-trip.
+ */
+export function selectRecentJobsPreview(
+  jobs: RecentJobSnapshot[] | null | undefined,
+  limit: number = RECENT_JOBS_PREVIEW_LIMIT,
+): RecentJobSnapshot[] {
+  if (!Array.isArray(jobs) || jobs.length === 0) return []
+  if (limit <= 0) return []
+  return jobs.slice(0, limit)
+}
+
+export type PickupSearchStatus = 'idle' | 'match' | 'no-match'
+
+export interface PickupSearchResult {
+  /** Normalised (uppercased, trimmed) query the owner typed, '' when idle. */
+  query: string
+  /** idle = no search yet, match = ≥1 job found, no-match = searched, none. */
+  status: PickupSearchStatus
+  /** The pickup jobs that matched the query (all jobs when idle). */
+  matches: PickupJobSnapshot[]
+}
+
+/**
+ * Pure pickup-code verification helper (KAN-39 scope #2).
+ *
+ * Given the ready-for-pickup jobs and the owner's typed code, classify the
+ * outcome so the page can show an explicit, plain-language success / not-found
+ * banner instead of a silently-filtered table. A blank query is `idle` and
+ * returns every pending pickup. A non-blank query matches by case-insensitive
+ * substring against the pickup code. Exported for unit testing.
+ */
+export function classifyPickupSearch(
+  jobs: PickupJobSnapshot[] | null | undefined,
+  rawQuery: string | null | undefined,
+): PickupSearchResult {
+  const all = Array.isArray(jobs) ? jobs : []
+  const query = (rawQuery ?? '').trim().toUpperCase()
+  if (query === '') {
+    return { query: '', status: 'idle', matches: all }
+  }
+  const matches = all.filter((job) => job.pickupCode.toUpperCase().includes(query))
+  return { query, status: matches.length > 0 ? 'match' : 'no-match', matches }
 }
 
 // ---------------------------------------------------------------------------
@@ -1472,6 +1536,35 @@ const SHARED_SCRIPTS = `<script>
       if (document.visibilityState === 'visible') poll();
     });
   })();
+
+  // --- Action loading feedback (KAN-39 P2-3) ------------------------------
+  // Any form carrying class "js-pending-form" gets pending feedback on submit:
+  // its submit button is disabled, marked aria-busy, and (if it declares a
+  // data-pending-text) its label is swapped to a reassuring "…" message. This
+  // prevents double-submits and shows the owner the action was received.
+  // Scoped to an opt-in marker class so it never conflicts with the forms the
+  // scripts above submit programmatically (host-location, configure-form, …).
+  var pendingForms = document.querySelectorAll('form.js-pending-form');
+  for (var pf = 0; pf < pendingForms.length; pf++) {
+    (function (form) {
+      form.addEventListener('submit', function () {
+        var btn = form.querySelector('button[type=submit], button:not([type])');
+        if (!btn || btn.disabled) return;
+        var pendingText = btn.getAttribute('data-pending-text');
+        if (pendingText) {
+          if (!btn.getAttribute('data-idle-text')) {
+            btn.setAttribute('data-idle-text', btn.textContent);
+          }
+          btn.textContent = pendingText;
+        }
+        btn.disabled = true;
+        btn.setAttribute('aria-busy', 'true');
+        // A disabled submit button is excluded from the POST body by the
+        // browser, but its hidden-input siblings still submit — so named
+        // values (jobId, uiToken, …) are unaffected.
+      });
+    })(pendingForms[pf]);
+  }
 })();
 </script>`
 
@@ -1832,12 +1925,14 @@ export async function startUiServer(runtime: AgentRuntime) {
   // ── Dashboard ─────────────────────────────────────────────────────────────
   app.get('/', (request, response) => {
     const snapshot = runtime.snapshot()
-    const pickupSearch = typeof request.query.pickupCode === 'string' ? request.query.pickupCode.trim().toUpperCase() : ''
     const notice = typeof request.query.notice === 'string' ? request.query.notice : null
     const errorMessage = typeof request.query.error === 'string' ? request.query.error : null
-    const readyForPickup = (snapshot.readyForPickup ?? []).filter((job) =>
-      pickupSearch ? job.pickupCode.toUpperCase().includes(pickupSearch) : true,
-    )
+    // KAN-39 scope #2: classify the pickup-code search so the page can show an
+    // explicit verified / not-found outcome rather than a silently-filtered
+    // table. `pickupSearch` is the result of the pure classifier helper.
+    const rawPickupQuery = typeof request.query.pickupCode === 'string' ? request.query.pickupCode : ''
+    const pickupSearch = classifyPickupSearch(snapshot.readyForPickup, rawPickupQuery)
+    const readyForPickup = pickupSearch.matches
     const sharedPrinterNames = snapshot.printers.filter((printer) => printer.shared).map((printer) => printer.localPrinterName)
     const profile = snapshot.profile
     const platformPrinters = snapshot.platformPrinters ?? []
@@ -1982,13 +2077,13 @@ export async function startUiServer(runtime: AgentRuntime) {
           <div class="mono" style="font-size:20px; letter-spacing:.15em; margin-top:4px;">${htmlEscape(snapshot.registration?.pairingCode ?? '—')}</div>
           <div class="muted small" style="margin-top:4px;">Expires: ${htmlEscape(snapshot.registration?.pairingCodeExpiresAt ?? '—')}</div>
           <div class="btn-row" style="margin-top:12px;">
-            <form method="post" action="/actions/repair">
+            <form method="post" action="/actions/repair" class="js-pending-form">
               ${hiddenUiToken(snapshot.uiToken)}
-              <button class="btn btn-secondary" type="submit">Generate new pairing code</button>
+              <button class="btn btn-secondary" type="submit" data-pending-text="Generating…">Generate new pairing code</button>
             </form>
-            <form method="post" action="/actions/refresh">
+            <form method="post" action="/actions/refresh" class="js-pending-form">
               ${hiddenUiToken(snapshot.uiToken)}
-              <button class="btn btn-secondary" type="submit">Refresh printers</button>
+              <button class="btn btn-secondary" type="submit" data-pending-text="Refreshing…">Refresh printers</button>
             </form>
           </div>
         </div>
@@ -2009,42 +2104,79 @@ export async function startUiServer(runtime: AgentRuntime) {
       </div>
 
       <div class="card">
-        <div class="card-title">Ready for pickup</div>
-        <form method="get" action="/" class="inline-form" style="margin-bottom:14px;">
+        <div class="card-title">Verify a pickup code</div>
+        <p class="muted small" style="margin-top:-4px;">
+          A customer collecting a finished print reads you their pickup code. Enter it
+          here to confirm the job is ready, then hand over the prints and mark it collected.
+        </p>
+        <form method="get" action="/" class="inline-form js-pending-form" style="margin:14px 0 4px;">
           <label>
-            <div class="label-text">Search by pickup code</div>
-            <input type="text" name="pickupCode" value="${htmlEscape(pickupSearch)}" placeholder="Enter pickup code" style="width:220px;" />
+            <div class="label-text">Pickup code from the customer</div>
+            <input type="text" name="pickupCode" value="${htmlEscape(pickupSearch.query)}"
+              placeholder="e.g. 7F3K2" autocomplete="off" autocapitalize="characters"
+              style="width:220px; text-transform:uppercase; letter-spacing:.12em;" />
           </label>
-          <button class="btn btn-secondary" type="submit">Search</button>
+          <button class="btn btn-primary" type="submit" data-pending-text="Checking…">Verify code</button>
+          ${pickupSearch.status !== 'idle'
+            ? `<a class="btn btn-secondary" href="/">Clear</a>`
+            : ''}
         </form>
-        <table class="data-table">
-          <thead><tr><th>Pickup code</th><th>Customer</th><th>Printer</th><th>Completed</th><th>Action</th></tr></thead>
-          <tbody>
-            ${readyForPickup.length === 0
-              ? `<tr><td colspan="5" class="muted">No completed secure pickup jobs are waiting.</td></tr>`
-              : readyForPickup.map((job) => `
-                <tr>
-                  <td>
-                    <strong class="pickup-code">${htmlEscape(job.pickupCode)}</strong><br/>
-                    <span class="muted small">${htmlEscape(job.jobId)}</span>
-                  </td>
-                  <td>
-                    ${htmlEscape(job.displayName ?? 'Anonymous pickup')}<br/>
-                    <span class="muted small">${htmlEscape(job.pageCount ? `${job.pageCount} pages` : '')}</span>
-                  </td>
-                  <td>${htmlEscape(job.printerName)}</td>
-                  <td class="muted small">${htmlEscape(job.completedAt)}</td>
-                  <td>
-                    <form method="post" action="/jobs/collect">
-                      ${hiddenUiToken(snapshot.uiToken)}
-                      <input type="hidden" name="jobId" value="${htmlEscape(job.jobId)}" />
-                      <button class="btn btn-primary" type="submit">Mark collected</button>
-                    </form>
-                  </td>
-                </tr>
-              `).join('')}
-          </tbody>
-        </table>
+        ${pickupSearch.status === 'match'
+          ? `<div style="margin:12px 0;">${stateBanner({
+              variant: 'success',
+              title: `Code ${pickupSearch.query} is valid — ${readyForPickup.length} ${readyForPickup.length === 1 ? 'job is' : 'jobs are'} ready`,
+              body: 'Check the customer details below, hand over the prints, then press "Mark collected".',
+            })}</div>`
+          : ''}
+        ${pickupSearch.status === 'no-match'
+          ? `<div style="margin:12px 0;">${stateBanner({
+              variant: 'warning',
+              title: `No ready job matches code ${pickupSearch.query}`,
+              body: 'Ask the customer to read the code again. It may have been mistyped, already collected, or the print may still be in progress — check the orders list.',
+            })}</div>`
+          : ''}
+        <div class="subsection" style="margin-top:14px; padding-top:14px;">
+          <div class="muted small" style="margin-bottom:10px;">
+            ${pickupSearch.status === 'idle'
+              ? 'All jobs waiting for secure pickup'
+              : `Showing jobs that match "${htmlEscape(pickupSearch.query)}"`}
+          </div>
+          <table class="data-table">
+            <thead><tr><th>Pickup code</th><th>Customer</th><th>Printer</th><th>Completed</th><th>Action</th></tr></thead>
+            <tbody>
+              ${readyForPickup.length === 0
+                ? (pickupSearch.status === 'idle'
+                    ? tableEmptyState({
+                        colspan: 5,
+                        icon: '✅',
+                        title: 'No jobs are waiting for pickup',
+                        text: 'When a customer’s secure print finishes, it will appear here with its pickup code.',
+                      })
+                    : `<tr><td colspan="5" class="muted">No ready job matches that pickup code.</td></tr>`)
+                : readyForPickup.map((job) => `
+                  <tr>
+                    <td>
+                      <strong class="pickup-code">${htmlEscape(job.pickupCode)}</strong><br/>
+                      <span class="muted small">${htmlEscape(job.jobId)}</span>
+                    </td>
+                    <td>
+                      ${htmlEscape(job.displayName ?? 'Anonymous pickup')}<br/>
+                      <span class="muted small">${htmlEscape(job.pageCount ? `${job.pageCount} pages` : '')}</span>
+                    </td>
+                    <td>${htmlEscape(job.printerName)}</td>
+                    <td class="muted small">${htmlEscape(formatTimestamp(job.completedAt))}</td>
+                    <td>
+                      <form method="post" action="/jobs/collect" class="js-pending-form">
+                        ${hiddenUiToken(snapshot.uiToken)}
+                        <input type="hidden" name="jobId" value="${htmlEscape(job.jobId)}" />
+                        <button class="btn btn-primary" type="submit" data-pending-text="Marking…">Mark collected</button>
+                      </form>
+                    </td>
+                  </tr>
+                `).join('')}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       <div class="card">
@@ -2059,9 +2191,9 @@ export async function startUiServer(runtime: AgentRuntime) {
               text: profile?.selfServiceEnabled
                 ? 'Use the form above to publish your first printer. Once published, customers can find and print to it.'
                 : 'Once your machine is approved, publish a printer here so customers can find and print to it.',
-              action: `<form method="post" action="/actions/refresh">
+              action: `<form method="post" action="/actions/refresh" class="js-pending-form">
                 ${hiddenUiToken(snapshot.uiToken)}
-                <button class="btn btn-secondary" type="submit">Refresh</button>
+                <button class="btn btn-secondary" type="submit" data-pending-text="Refreshing…">Refresh</button>
               </form>`,
             })}</div>`
           : ''}
@@ -2087,10 +2219,10 @@ export async function startUiServer(runtime: AgentRuntime) {
                       ${profile?.selfServiceEnabled
                         ? `
                           ${renderPlatformPrinterForm(snapshot.uiToken, sharedPrinterNames, printer)}
-                          <form method="post" action="/platform-printers/remove" style="margin-top:12px;">
+                          <form method="post" action="/platform-printers/remove" class="js-pending-form" style="margin-top:12px;">
                             ${hiddenUiToken(snapshot.uiToken)}
                             <input type="hidden" name="printerId" value="${htmlEscape(printer.printerId)}" />
-                            <button class="btn btn-danger" type="submit">Unpublish printer</button>
+                            <button class="btn btn-danger" type="submit" data-pending-text="Unpublishing…">Unpublish printer</button>
                           </form>
                         `
                         : `<div class="muted small">Editing is blocked until the agent is approved.</div>`}
@@ -2113,9 +2245,9 @@ export async function startUiServer(runtime: AgentRuntime) {
                   colspan: 3,
                   title: 'No printers detected on this PC yet',
                   text: 'Connect a printer to this computer and install its Windows driver, then refresh to detect it here.',
-                  action: `<form method="post" action="/actions/refresh">
+                  action: `<form method="post" action="/actions/refresh" class="js-pending-form">
                     ${hiddenUiToken(snapshot.uiToken)}
-                    <button class="btn btn-secondary" type="submit">Refresh printers</button>
+                    <button class="btn btn-secondary" type="submit" data-pending-text="Refreshing…">Refresh printers</button>
                   </form>`,
                 })
               : snapshot.printers.map((printer) => `
@@ -2130,11 +2262,11 @@ export async function startUiServer(runtime: AgentRuntime) {
                   ${htmlEscape(printer.supportedPaperSizes.join(', ') || 'Unknown sizes')}
                 </td>
                 <td>
-                  <form method="post" action="/printers/share">
+                  <form method="post" action="/printers/share" class="js-pending-form">
                     ${hiddenUiToken(snapshot.uiToken)}
                     <input type="hidden" name="localPrinterName" value="${htmlEscape(printer.localPrinterName)}" />
                     <input type="hidden" name="shared" value="${printer.shared ? 'false' : 'true'}" />
-                    <button class="btn btn-secondary" type="submit">${printer.shared ? 'Stop sharing' : 'Share printer'}</button>
+                    <button class="btn btn-secondary" type="submit" data-pending-text="Saving…">${printer.shared ? 'Stop sharing' : 'Share printer'}</button>
                   </form>
                 </td>
               </tr>
@@ -2143,20 +2275,41 @@ export async function startUiServer(runtime: AgentRuntime) {
         </table>
       </div>
 
+      ${(() => {
+        // KAN-39 P2-1: compact recent-activity preview. The full, authoritative
+        // job list lives at /orders — this card shows only the latest few items
+        // and links there. Columns/terminology are kept aligned with /orders so
+        // it is obviously the same data at a lower fidelity.
+        const recentJobs = snapshot.recentJobs ?? []
+        const preview = selectRecentJobsPreview(recentJobs)
+        return `
       <div class="card">
-        <div class="card-title">Recent jobs</div>
-        <table class="data-table">
-          <thead><tr><th>Job ID</th><th>Printer</th><th>Status</th><th>Details</th><th>Time</th></tr></thead>
+        <div class="card-row">
+          <div class="card-title" style="margin-bottom:0;">Recent activity</div>
+          <a class="card-link" href="/orders">View all orders →</a>
+        </div>
+        <p class="muted small" style="margin-top:6px;">
+          The latest jobs at your printers. The
+          <a href="/orders">Orders page</a> has the full, complete history.
+        </p>
+        <table class="data-table" style="margin-top:10px;">
+          <thead><tr><th>Job</th><th>Printer</th><th>Status</th><th>Customer</th><th>Updated</th></tr></thead>
           <tbody>
-            ${(snapshot.recentJobs ?? []).length === 0
-              ? `<tr><td colspan="5" class="muted">No jobs have run yet.</td></tr>`
-              : (snapshot.recentJobs ?? []).map((job) => `
+            ${preview.length === 0
+              ? tableEmptyState({
+                  colspan: 5,
+                  icon: '🖨',
+                  title: 'No jobs have run yet',
+                  text: 'Once a customer prints to one of your published printers, the most recent jobs will appear here.',
+                })
+              : preview.map((job) => `
                 <tr>
-                  <td class="mono small">${htmlEscape(job.jobId)}</td>
+                  <td class="mono small">${htmlEscape(job.jobId.slice(0, 8))}…</td>
                   <td>${htmlEscape(job.printerName)}</td>
                   <td><span class="${statusBadge(job.status)}">${htmlEscape(humanizeEnum(job.status))}</span></td>
                   <td>
-                    ${htmlEscape(job.displayName ?? job.pickupCode ?? '—')}
+                    ${job.displayName ? htmlEscape(job.displayName) : '<span class="muted">—</span>'}
+                    ${job.pickupCode ? `<br/><span class="pickup-code" style="font-size:13px;">${htmlEscape(job.pickupCode)}</span>` : ''}
                     ${job.failureReason ? `<br/><span class="muted small">${htmlEscape(job.failureReason)}</span>` : ''}
                   </td>
                   <td class="muted small">${htmlEscape(formatTimestamp(job.updatedAt))}</td>
@@ -2164,23 +2317,42 @@ export async function startUiServer(runtime: AgentRuntime) {
               `).join('')}
           </tbody>
         </table>
-      </div>
+        ${recentJobs.length > preview.length
+          ? `<div class="muted small" style="margin-top:12px;">
+              Showing the ${preview.length} most recent jobs.
+              <a href="/orders">View all orders →</a>
+            </div>`
+          : ''}
+      </div>`
+      })()}
     `
 
     response.type('html').send(pageShell({ title: 'Dashboard', activePage: 'dashboard', snapshot, notice, error: errorMessage }, content))
   })
 
   // ── Orders ────────────────────────────────────────────────────────────────
+  // KAN-39 P2-1: this is the single AUTHORITATIVE, full job list. The dashboard
+  // "Recent activity" card is only a compact preview that links here. Columns
+  // and terminology are kept aligned with that preview (Job / Printer / Status
+  // / Customer / Updated) so they read as the same data at two fidelities.
   app.get('/orders', async (request, response) => {
     const snapshot = runtime.snapshot()
     const notice = typeof request.query.notice === 'string' ? request.query.notice : null
     const errorMessage = typeof request.query.error === 'string' ? request.query.error : null
 
     let ordersHtml = ''
+    let orderCount = 0
+    let loadError: string | null = null
     try {
       const orders = await runtime.listOrders()
+      orderCount = orders.length
       if (orders.length === 0) {
-        ordersHtml = `<tr><td colspan="7" class="muted">No orders have been received yet.</td></tr>`
+        ordersHtml = tableEmptyState({
+          colspan: 7,
+          icon: '🖨',
+          title: 'No orders have been received yet',
+          text: 'When a customer prints to one of your published printers, every job will be listed here with its status and pickup code.',
+        })
       } else {
         ordersHtml = orders.map((order) => `
           <tr>
@@ -2190,6 +2362,7 @@ export async function startUiServer(runtime: AgentRuntime) {
             <td>
               ${order.displayName ? htmlEscape(order.displayName) : '<span class="muted">—</span>'}
               ${order.pickupCode ? `<br/><span class="pickup-code" style="font-size:13px;">${htmlEscape(order.pickupCode)}</span>` : ''}
+              ${order.failureReason ? `<br/><span class="muted small">${htmlEscape(order.failureReason)}</span>` : ''}
             </td>
             <td class="muted small">${order.pageCount} pages</td>
             <td class="muted small">${htmlEscape(formatTimestamp(order.queuedAt))}</td>
@@ -2198,18 +2371,43 @@ export async function startUiServer(runtime: AgentRuntime) {
         `).join('')
       }
     } catch (error) {
-      ordersHtml = `<tr><td colspan="7" class="muted">${htmlEscape(error instanceof Error ? error.message : 'Could not load orders')}</td></tr>`
+      loadError = error instanceof Error ? error.message : 'Could not load orders'
+      ordersHtml = tableEmptyState({
+        colspan: 7,
+        icon: '⚠️',
+        title: 'The orders list could not be loaded',
+        text: 'The agent could not reach the PrintAnywhere server to fetch your orders. Check your connection and try refreshing.',
+      })
     }
 
     const content = `
-      <div>
-        <div class="page-eyebrow">Print jobs</div>
-        <div class="page-title">Orders</div>
+      <div class="card-row">
+        <div>
+          <div class="page-eyebrow">Print jobs</div>
+          <div class="page-title">Orders</div>
+        </div>
+        <form method="post" action="/actions/refresh" class="js-pending-form">
+          ${hiddenUiToken(snapshot.uiToken)}
+          <button class="btn btn-secondary" type="submit" data-pending-text="Refreshing…">Refresh</button>
+        </form>
       </div>
+      ${loadError
+        ? `<div style="margin-bottom:14px;">${stateBanner({
+            variant: 'warning',
+            title: 'Showing the latest available data',
+            body: loadError,
+          })}</div>`
+        : ''}
       <div class="card">
-        <div class="card-title">All orders received at your printers</div>
+        <div class="card-row">
+          <div class="card-title" style="margin-bottom:0;">All orders received at your printers</div>
+          ${orderCount > 0 ? `<span class="muted small">${orderCount} ${orderCount === 1 ? 'order' : 'orders'}</span>` : ''}
+        </div>
+        <p class="muted small" style="margin-top:6px; margin-bottom:12px;">
+          This is the complete, authoritative list of every print job. The dashboard shows only the most recent few.
+        </p>
         <table class="data-table">
-          <thead><tr><th>Job ID</th><th>Printer</th><th>Status</th><th>Customer</th><th>Pages</th><th>Queued</th><th>Finished</th></tr></thead>
+          <thead><tr><th>Job</th><th>Printer</th><th>Status</th><th>Customer</th><th>Pages</th><th>Queued</th><th>Finished</th></tr></thead>
           <tbody>${ordersHtml}</tbody>
         </table>
       </div>
