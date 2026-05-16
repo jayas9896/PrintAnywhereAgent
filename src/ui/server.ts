@@ -1,7 +1,10 @@
+import { createHash } from 'node:crypto'
+import { mkdir, readdir, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import express from 'express'
 import type { Request, Response } from 'express'
+import multer from 'multer'
 import QRCode from 'qrcode'
 import type {
   AgentApprovalStatus,
@@ -352,6 +355,83 @@ function statusBadge(status: string) {
   if (['FAILED', 'REJECTED', 'SUSPENDED', 'OFFLINE'].includes(s)) return 'badge badge-bad'
   if (['QUEUED', 'DOWNLOADING', 'DECRYPTING', 'PRINTING', 'DISPATCHING'].includes(s)) return 'badge badge-info'
   return 'badge'
+}
+
+// ---------------------------------------------------------------------------
+// Logo upload validation (KAN-40 scope #4 — UX review KAN-29 P1-6)
+// ---------------------------------------------------------------------------
+//
+// The business logo was a raw URL text input and the header <img> silently
+// hid on error — a non-technical owner had no way to know it failed, and no
+// way to upload a file they had on disk. We now accept a real file upload.
+// validateLogoUpload sniffs the file's magic bytes (not the client-supplied
+// content-type, which cannot be trusted) and enforces a size cap.
+
+/** Largest logo file we accept, in bytes (2 MB). */
+export const MAX_LOGO_BYTES = 2 * 1024 * 1024
+
+export interface LogoValidationResult {
+  ok: boolean
+  /** File extension to store the logo under, when ok. */
+  ext?: 'png' | 'jpg' | 'svg'
+  /** Friendly, operator-facing reason when not ok. */
+  error?: string
+}
+
+/**
+ * Validate an uploaded logo buffer by sniffing its real format from the
+ * leading bytes. Accepts PNG, JPEG and SVG only, up to MAX_LOGO_BYTES.
+ * Pure and exported so the rules are unit-testable without a real upload.
+ */
+export function validateLogoUpload(
+  buffer: Buffer | null | undefined,
+  declaredName?: string | null,
+): LogoValidationResult {
+  if (!buffer || buffer.length === 0) {
+    return { ok: false, error: 'No file was received. Please choose an image file and try again.' }
+  }
+  if (buffer.length > MAX_LOGO_BYTES) {
+    return {
+      ok: false,
+      error: 'That image is too large. Please use a logo under 2 MB.',
+    }
+  }
+
+  // PNG — 89 50 4E 47 0D 0A 1A 0A
+  if (
+    buffer.length >= 8
+    && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47
+    && buffer[4] === 0x0d && buffer[5] === 0x0a && buffer[6] === 0x1a && buffer[7] === 0x0a
+  ) {
+    return { ok: true, ext: 'png' }
+  }
+
+  // JPEG — starts FF D8 FF
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return { ok: true, ext: 'jpg' }
+  }
+
+  // SVG — text format. Look for an <svg tag near the start (allowing an XML
+  // prolog / BOM / whitespace), case-insensitively.
+  const head = buffer.subarray(0, 512).toString('utf8').toLowerCase()
+  if (head.includes('<svg')) {
+    // A defensive sanity check: SVG can carry scripts. We only embed the file
+    // via an <img> tag (which does not execute SVG scripts) and serve it with
+    // nosniff, but reject anything with an obvious inline <script> anyway.
+    if (head.includes('<script')) {
+      return {
+        ok: false,
+        error: 'That SVG file contains a script and was not accepted. Please use a plain image logo.',
+      }
+    }
+    return { ok: true, ext: 'svg' }
+  }
+
+  const named = declaredName ? ` ("${declaredName}")` : ''
+  return {
+    ok: false,
+    error: `That file${named} is not a supported image. Please upload a PNG, JPG or SVG logo.`,
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -973,6 +1053,20 @@ const SHARED_CSS = `
   input:focus, select:focus, textarea:focus { border-color: var(--brand-mid); }
   .hint { font-size: var(--text-xs); color: var(--muted); margin-top: var(--space-1); }
 
+  /* Logo upload (KAN-40 P1-6) — preview tile + upload form side by side. */
+  .logo-row { display: flex; gap: var(--space-5); flex-wrap: wrap; align-items: flex-start; }
+  .logo-upload-form { flex: 1; min-width: 240px; }
+  .logo-preview {
+    width: 132px; flex-shrink: 0; border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: var(--space-3); background: var(--surface-alt);
+    display: flex; flex-direction: column; align-items: center; gap: var(--space-2);
+  }
+  .logo-preview img { max-width: 100%; max-height: 90px; width: auto; height: auto; }
+  .logo-preview-broken { display: none; text-align: center; color: var(--status-bad-fg); }
+  .logo-preview.is-broken img { display: none; }
+  .logo-preview.is-broken .logo-preview-broken { display: block; }
+  input[type=file] { font-size: var(--text-sm); width: 100%; }
+
   /* Field-level validation error — shown directly beneath the offending
    * input when a sticky form re-renders after a failed submit (KAN-40 P1-5).
    * A leading ⚠ glyph carries meaning alongside the colour. */
@@ -1515,6 +1609,97 @@ function renderConfigureForm(
       </div>
     </form>
   `
+}
+
+/**
+ * The Branding & white-label card (KAN-40 P1-6 + P2-4).
+ *
+ * The business logo is now a real file upload (PNG / JPG / SVG) served from
+ * the writable /branding directory, with a live preview and a Remove action.
+ * A custom logo URL is still supported but demoted into an Advanced
+ * disclosure with an inline load-failure hint, since the silent-hide on a
+ * broken URL left non-technical owners with no idea it had failed.
+ */
+function renderBrandingCard(snapshot: ReturnType<AgentRuntime['snapshot']>) {
+  const logo = snapshot.brandLogoUrl?.trim() || null
+  const isUploaded = !!logo && logo.startsWith('/branding/')
+  const logoPreview = logo
+    ? `<div class="logo-preview">
+        <img src="${htmlEscape(logo)}" alt="Current business logo"
+          onerror="this.closest('.logo-preview').classList.add('is-broken')" />
+        <div class="logo-preview-broken muted small">
+          This logo image could not be loaded. ${isUploaded
+            ? 'Try uploading the file again.'
+            : 'Check the logo URL in Advanced settings below — it may be wrong or unreachable.'}
+        </div>
+      </div>`
+    : `<div class="muted small">No logo set yet. Your shop name will be shown on its own.</div>`
+
+  return `
+    <div class="card">
+      <div class="card-title">Branding &amp; white-label</div>
+      <p class="muted small" style="margin-bottom:14px;">
+        Add your shop's name and logo so this console and your customers' receipts feel like your business.
+      </p>
+
+      <div class="subsection" style="margin-top:0; padding-top:0; border-top:0;">
+        <div class="subsection-title">Business logo</div>
+        <div class="logo-row">
+          ${logoPreview}
+          <form method="post" action="/settings/logo" enctype="multipart/form-data" class="logo-upload-form js-pending-form">
+            ${hiddenUiToken(snapshot.uiToken)}
+            <label>
+              <div class="label-text">Choose a logo image</div>
+              <input type="file" name="logo" accept="image/png,image/jpeg,image/svg+xml" required />
+              <div class="hint">PNG, JPG or SVG, up to 2 MB. This is saved on this PC.</div>
+            </label>
+            <div class="btn-row" style="margin-top:8px;">
+              <button class="btn btn-primary" type="submit" data-pending-text="Uploading…">
+                ${logo ? 'Replace logo' : 'Upload logo'}
+              </button>
+              ${isUploaded
+                ? `<button class="btn btn-danger" type="submit" formaction="/settings/logo/remove"
+                     formenctype="application/x-www-form-urlencoded" data-pending-text="Removing…">Remove logo</button>`
+                : ''}
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <div class="subsection">
+        <div class="subsection-title">Shop name &amp; support contact</div>
+        <form method="post" action="/settings/branding" class="stack js-pending-form">
+          ${hiddenUiToken(snapshot.uiToken)}
+          <div class="grid-2">
+            <label>
+              <div class="label-text">Business name (shown in the header)</div>
+              <input type="text" name="brandName" value="${htmlEscape(snapshot.brandName ?? '')}" placeholder="Your Print Shop" />
+            </label>
+            <label>
+              <div class="label-text">Support email (shown on the Support page)</div>
+              <input type="email" name="supportContactEmail" value="${htmlEscape(snapshot.supportContactEmail ?? '')}" placeholder="support@yourshop.com" />
+            </label>
+          </div>
+          <details>
+            <summary><span class="summary-row"><span>Advanced: use a logo from a web address instead</span></span></summary>
+            <p class="muted small" style="margin-top:8px;">
+              Most shops should upload a file above. Only use this if your logo is already
+              hosted online. If the address is wrong, the logo simply will not appear.
+            </p>
+            <label style="margin-top:8px;">
+              <div class="label-text">Business logo URL</div>
+              <input type="url" name="brandLogoUrl"
+                value="${isUploaded ? '' : htmlEscape(snapshot.brandLogoUrl ?? '')}"
+                placeholder="https://yourshop.com/logo.png" />
+              <div class="hint">Leave blank to keep your uploaded logo (if any).</div>
+            </label>
+          </details>
+          <div class="btn-row">
+            <button class="btn btn-primary" type="submit" data-pending-text="Saving…">Save shop details</button>
+          </div>
+        </form>
+      </div>
+    </div>`
 }
 
 /**
@@ -2652,6 +2837,42 @@ function renderFormErrorPage(opts: {
 // Route server
 // ---------------------------------------------------------------------------
 
+/**
+ * Remove every previously-stored logo file from the branding directory.
+ * Logo files are content-hash named, so on a replace/remove we sweep the
+ * whole directory rather than tracking the exact old filename.
+ */
+async function clearBrandingDir(brandingDir: string): Promise<void> {
+  let entries: string[]
+  try {
+    entries = await readdir(brandingDir)
+  } catch {
+    return
+  }
+  await Promise.all(
+    entries
+      .filter((name) => /^logo-[0-9a-f]+\.(png|jpg|svg)$/.test(name))
+      .map((name) => unlink(path.join(brandingDir, name)).catch(() => {})),
+  )
+}
+
+/**
+ * Write a validated logo buffer to the branding directory under a content-
+ * hashed filename and return the public `/branding/...` URL it is served at.
+ * Any previously-stored logo is removed first.
+ */
+async function storeBrandingLogo(
+  brandingDir: string,
+  buffer: Buffer,
+  ext: 'png' | 'jpg' | 'svg',
+): Promise<string> {
+  await clearBrandingDir(brandingDir)
+  const hash = createHash('sha256').update(buffer).digest('hex').slice(0, 16)
+  const fileName = `logo-${hash}.${ext}`
+  await writeFile(path.join(brandingDir, fileName), buffer)
+  return `/branding/${fileName}`
+}
+
 export async function startUiServer(runtime: AgentRuntime) {
   const app = express()
 
@@ -2668,6 +2889,28 @@ export async function startUiServer(runtime: AgentRuntime) {
 
   const assetsDir = path.resolve(__dirname, '../../assets')
   app.use('/assets', express.static(assetsDir))
+
+  // KAN-40 P1-6: uploaded business logos are written to a writable runtime
+  // directory (data/branding) — NOT assets/, which is packaged with the
+  // release and is read-only in an installed agent. Served at /branding.
+  const brandingDir = path.resolve(__dirname, '../../data/branding')
+  await mkdir(brandingDir, { recursive: true })
+  app.use(
+    '/branding',
+    express.static(brandingDir, {
+      // Logo filenames are content-hashed, so a given file never changes.
+      maxAge: '7d',
+      setHeaders: (res) => res.setHeader('X-Content-Type-Options', 'nosniff'),
+    }),
+  )
+
+  // multer holds the upload in memory so we can magic-byte validate the
+  // buffer before ever writing it to disk. The hard cap is enforced here too.
+  const logoUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: MAX_LOGO_BYTES, files: 1 },
+  })
+
   app.use(express.urlencoded({ extended: false }))
 
   // ── Health (JSON, no page shell) ──────────────────────────────────────────
@@ -2814,29 +3057,7 @@ export async function startUiServer(runtime: AgentRuntime) {
         </form>
       </div>
 
-      <div class="card">
-        <div class="card-title">Branding &amp; white-label</div>
-        <form method="post" action="/settings/branding" class="stack">
-          ${hiddenUiToken(snapshot.uiToken)}
-          <div class="grid-2">
-            <label>
-              <div class="label-text">Business name (shown in header)</div>
-              <input type="text" name="brandName" value="${htmlEscape(snapshot.brandName ?? '')}" placeholder="Your Print Shop" />
-            </label>
-            <label>
-              <div class="label-text">Business logo URL (optional)</div>
-              <input type="url" name="brandLogoUrl" value="${htmlEscape(snapshot.brandLogoUrl ?? '')}" placeholder="https://yourshop.com/logo.png" />
-            </label>
-            <label class="span-2">
-              <div class="label-text">Support contact email (shown on Support page)</div>
-              <input type="email" name="supportContactEmail" value="${htmlEscape(snapshot.supportContactEmail ?? '')}" placeholder="support@yourshop.com" />
-            </label>
-          </div>
-          <div class="btn-row">
-            <button class="btn btn-primary" type="submit">Save branding</button>
-          </div>
-        </form>
-      </div>
+      ${renderBrandingCard(snapshot)}
 
       <div class="card">
         <div class="card-title">Registration &amp; approval</div>
@@ -3596,14 +3817,72 @@ export async function startUiServer(runtime: AgentRuntime) {
     if (!verifyUiRequest(runtime, request, response)) return
     try {
       const body = request.body as Record<string, unknown>
+      const typedUrl = parseOptionalTrimmed(body, 'brandLogoUrl')
+      const currentLogo = runtime.snapshot().brandLogoUrl?.trim() || null
+      // KAN-40 P1-6: the Advanced URL field is left blank by owners who
+      // uploaded a file. A blank URL must not wipe an existing uploaded logo
+      // — only an explicitly typed URL replaces it.
+      const logo = typedUrl ?? currentLogo
       await runtime.updateBranding(
         parseOptionalTrimmed(body, 'brandName'),
-        parseOptionalTrimmed(body, 'brandLogoUrl'),
+        logo,
         parseOptionalTrimmed(body, 'supportContactEmail'),
       )
-      redirectWithStatus(response, 'notice', 'Branding settings saved.')
+      redirectWithStatus(response, 'notice', 'Your shop details were saved.')
     } catch (error) {
       redirectWithStatus(response, 'error', error instanceof Error ? error.message : 'Could not save branding')
+    }
+  })
+
+  // KAN-40 P1-6 — business logo file upload. The file is magic-byte
+  // validated in memory before being written to the writable branding dir.
+  // The multer middleware is wrapped so an over-size / malformed multipart
+  // upload becomes a friendly redirect, not an unhandled 500.
+  const handleLogoUpload: express.RequestHandler = (request, response, next) => {
+    logoUpload.single('logo')(request, response, (error: unknown) => {
+      if (error) {
+        const tooLarge =
+          error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE'
+        redirectWithStatus(
+          response,
+          'error',
+          tooLarge
+            ? 'That image is too large. Please use a logo under 2 MB.'
+            : 'That file could not be read as an image. Please try a PNG, JPG or SVG.',
+        )
+        return
+      }
+      next()
+    })
+  }
+
+  app.post('/settings/logo', handleLogoUpload, async (request, response) => {
+    if (!verifyUiRequest(runtime, request, response)) return
+    try {
+      const file = request.file
+      const validation = validateLogoUpload(file?.buffer, file?.originalname)
+      if (!validation.ok || !validation.ext || !file) {
+        redirectWithStatus(response, 'error', validation.error ?? 'That logo could not be used.')
+        return
+      }
+      const logoUrl = await storeBrandingLogo(brandingDir, file.buffer, validation.ext)
+      const snapshot = runtime.snapshot()
+      await runtime.updateBranding(snapshot.brandName ?? null, logoUrl, snapshot.supportContactEmail ?? null)
+      redirectWithStatus(response, 'notice', 'Your logo was uploaded.')
+    } catch (error) {
+      redirectWithStatus(response, 'error', error instanceof Error ? error.message : 'Could not upload the logo')
+    }
+  })
+
+  app.post('/settings/logo/remove', async (request, response) => {
+    if (!verifyUiRequest(runtime, request, response)) return
+    try {
+      await clearBrandingDir(brandingDir)
+      const snapshot = runtime.snapshot()
+      await runtime.updateBranding(snapshot.brandName ?? null, null, snapshot.supportContactEmail ?? null)
+      redirectWithStatus(response, 'notice', 'Your logo was removed.')
+    } catch (error) {
+      redirectWithStatus(response, 'error', error instanceof Error ? error.message : 'Could not remove the logo')
     }
   })
 
