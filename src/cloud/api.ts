@@ -185,6 +185,41 @@ function apiError(response: Response, body: string): Error {
   return new Error(`HTTP ${response.status}: ${safe || response.statusText}`)
 }
 
+/**
+ * KAN-59: Guards against a malicious/compromised/buggy backend handing the
+ * agent a job `downloadUrl` that points at an attacker-controlled host. The
+ * agent attaches its long-lived `Authorization: Bearer <agentSecret>` to that
+ * fetch, so a cross-origin URL would harvest the agent secret and could pivot
+ * SSRF onto the print-shop LAN.
+ *
+ * Enforces that the download URL's origin exactly matches the configured
+ * backend origin. Throws (does NOT return false) on mismatch so callers cannot
+ * accidentally proceed. Pure and exported so it can be unit-tested without
+ * stubbing `fetch`.
+ */
+export function assertSameOrigin(configuredServerUrl: string, downloadUrl: string): URL {
+  let configuredOrigin: string
+  try {
+    configuredOrigin = new URL(configuredServerUrl).origin
+  } catch {
+    throw new Error('Configured PrintAnywhere backend URL is not a valid URL')
+  }
+  let parsedDownloadUrl: URL
+  try {
+    parsedDownloadUrl = new URL(downloadUrl)
+  } catch {
+    throw new Error('Job download URL supplied by the backend is not a valid URL')
+  }
+  if (parsedDownloadUrl.origin !== configuredOrigin) {
+    throw new Error(
+      `Refusing to fetch job from a different origin than the configured backend ` +
+        `(expected ${configuredOrigin}, got ${parsedDownloadUrl.origin}). ` +
+        `The agent credential will not be sent to a cross-origin host.`,
+    )
+  }
+  return parsedDownloadUrl
+}
+
 export class CloudApiClient {
   constructor(
     private readonly serverUrl: string,
@@ -254,7 +289,10 @@ export class CloudApiClient {
   }
 
   async download(agentSecret: string, downloadUrl: string, leaseToken: string) {
-    const url = new URL(downloadUrl)
+    // KAN-59: enforce the download URL's origin matches the configured backend
+    // BEFORE constructing any headers or signing — never send the agent's
+    // Authorization bearer token to a cross-origin host.
+    const url = assertSameOrigin(this.serverUrl, downloadUrl)
     url.searchParams.set('lease', leaseToken)
     const path = url.pathname
     const response = await fetch(url, {
