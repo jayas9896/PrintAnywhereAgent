@@ -153,5 +153,49 @@ if (-not $listenerIsCurrentRuntime) {
 }
 
 if ($OpenUi) {
-    Start-Process "http://127.0.0.1:$Port"
+    # KAN-165: open the local console over HTTPS. By default the professional
+    # domain (local.printanywhere.dhruvantasystems.com) is used; a business
+    # user / support can switch to the loopback address by setting
+    # "uiHost": "localhost" in ui-launcher.json in the data directory.
+    #
+    # The agent writes the *actual* listening port to ui-runtime.json once it
+    # binds (it may fall back past a busy port). Wait briefly for that file so
+    # the launcher opens the correct URL, then fall back to the configured port.
+    $uiDomain = "local.printanywhere.dhruvantasystems.com"
+    $uiHost = "domain"
+    $openPort = $Port
+
+    $launcherConfigPath = Join-Path $DataDir "ui-launcher.json"
+    if (Test-Path $launcherConfigPath) {
+        try {
+            $launcherConfig = Get-Content $launcherConfigPath -Raw | ConvertFrom-Json
+            if ($launcherConfig.uiHost -eq "localhost") {
+                $uiHost = "localhost"
+            }
+        } catch {
+            # Malformed config — fall back to the domain default.
+        }
+    }
+
+    $runtimeInfoPath = Join-Path $DataDir "ui-runtime.json"
+    for ($wait = 0; $wait -lt 30; $wait += 1) {
+        if (Test-Path $runtimeInfoPath) {
+            try {
+                $runtimeInfo = Get-Content $runtimeInfoPath -Raw | ConvertFrom-Json
+                if ($runtimeInfo.port -gt 0) {
+                    $openPort = [int]$runtimeInfo.port
+                }
+                break
+            } catch {
+                # File mid-write — retry.
+            }
+        }
+        Start-Sleep -Milliseconds 500
+    }
+
+    if ($uiHost -eq "localhost") {
+        Start-Process "https://127.0.0.1:$openPort"
+    } else {
+        Start-Process "https://$uiDomain`:$openPort"
+    }
 }

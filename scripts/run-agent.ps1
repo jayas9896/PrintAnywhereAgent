@@ -112,7 +112,7 @@ Write-Host "Starting PrintAnywhere Agent"
 Write-Host "Repo: $repoRoot"
 Write-Host "Data directory: $DataDir"
 Write-Host "Log file: $LogFile"
-Write-Host "UI: http://127.0.0.1:$Port"
+Write-Host "UI: https://local.printanywhere.dhruvantasystems.com:$Port (loopback fallback https://127.0.0.1:$Port)"
 if (-not [string]::IsNullOrWhiteSpace($EnvFile)) {
     Write-Host "Environment file: $EnvFile"
 }

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { mkdir, readdir, unlink, writeFile } from 'node:fs/promises'
+import { createServer as createHttpsServer } from 'node:https'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import express from 'express'
@@ -23,6 +24,8 @@ import type {
 import type { AgentCouponUpsertPayload } from '../cloud/api.js'
 import { AGENT_VERSION, defaultPrintAnywhereBackendUrl } from '../config/defaults.js'
 import type { AgentRuntime, PlatformPrinterUpsertInput } from '../runtime/agentRuntime.js'
+import { LOCAL_UI_DOMAIN, ensureLocalCert } from './localHttps.js'
+import { DEFAULT_UI_PORT, readLauncherConfig, writeUiRuntimeInfo } from './launcherConfig.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -48,11 +51,17 @@ function hiddenUiToken(uiToken: string | null | undefined) {
   return `<input type="hidden" name="uiToken" value="${htmlEscape(uiToken ?? '')}" />`
 }
 
+// KAN-165: the local UI is also served at the loopback-pinned domain
+// `local.printanywhere.dhruvantasystems.com` (hosts-file entry -> 127.0.0.1).
+// The domain is an accepted same-machine origin alongside the raw loopback
+// hosts — it never resolves anywhere but 127.0.0.1.
+const LOCAL_UI_ALLOWED_HOSTS = ['127.0.0.1', 'localhost', '::1', LOCAL_UI_DOMAIN]
+
 function isLoopbackOrigin(value: string | undefined) {
   if (!value) return true
   try {
     const url = new URL(value)
-    return ['127.0.0.1', 'localhost', '::1'].includes(url.hostname)
+    return LOCAL_UI_ALLOWED_HOSTS.includes(url.hostname)
   } catch {
     return false
   }
@@ -3492,7 +3501,7 @@ export async function startUiServer(runtime: AgentRuntime) {
         <details class="faq-section" open>
           <summary>I forgot my agent credentials — how do I log in?</summary>
           <div class="faq-a" style="margin-top:10px;">
-            <p>The agent console at <code>localhost:43100</code> does not use a password. It uses a machine-level security token automatically. If you can open this page, you are already authenticated.</p>
+            <p>The agent console at <code>local.printanywhere.dhruvantasystems.com</code> (or <code>localhost</code> as a fallback) does not use a password. It uses a machine-level security token automatically. If you can open this page, you are already authenticated.</p>
             <p>If this console is inaccessible, make sure the PrintAnywhere Agent service is running. Check Windows Services (services.msc) or the system tray icon.</p>
           </div>
         </details>
@@ -3558,13 +3567,14 @@ export async function startUiServer(runtime: AgentRuntime) {
         </details>
 
         <details class="faq-section">
-          <summary>Agent console is not opening at localhost:43100</summary>
+          <summary>Agent console is not opening at local.printanywhere.dhruvantasystems.com</summary>
           <div class="faq-a" style="margin-top:10px;">
             <ol style="padding-left:18px; line-height:2;">
               <li>Check that the PrintAnywhere Agent is running: look for it in the system tray or check Windows Services.</li>
               <li>If the service is stopped, start it from Services (<kbd>Win + R</kbd> → <code>services.msc</code> → find "PrintAnywhere Agent" → Start).</li>
               <li>If it crashes immediately after starting, check the agent log file in <code>%AppData%\PrintAnywhere\logs\</code>.</li>
-              <li>Try a different browser or clear the browser cache. The console is only accessible from <strong>this computer</strong> (localhost).</li>
+              <li>If the <code>local.printanywhere.dhruvantasystems.com</code> address fails on your network, support can switch the launcher to the <code>localhost</code> address by editing <code>ui-launcher.json</code> in the agent data folder (set <code>"uiHost"</code> to <code>"localhost"</code>).</li>
+              <li>Try a different browser or clear the browser cache. The console is only accessible from <strong>this computer</strong>.</li>
             </ol>
           </div>
         </details>
@@ -4041,17 +4051,72 @@ export async function startUiServer(runtime: AgentRuntime) {
   })
 
   // ── Start ─────────────────────────────────────────────────────────────────
-  const port = Number(process.env.PRINTANYWHERE_AGENT_PORT ?? 43100)
-  return new Promise<{ close: () => Promise<void> }>((resolve) => {
-    const server = app.listen(port, '127.0.0.1', () => {
-      console.log(`PrintAnywhere Agent UI listening on http://127.0.0.1:${port}`)
-      resolve({
-        close: () =>
-          new Promise((closeResolve, closeReject) => {
-            server.close((error) => (error ? closeReject(error) : closeResolve()))
-          }),
+  // KAN-165: the UI is now served over HTTPS with a per-host self-signed
+  // certificate so the operator console can open at the professional domain
+  // `https://local.printanywhere.dhruvantasystems.com:<port>`. The same socket
+  // also answers `127.0.0.1` / `localhost` (the domain is a hosts-file alias
+  // for 127.0.0.1) so the loopback fallback stays fully functional.
+  const dataDir = runtime.dataDir
+  const launcherConfig = readLauncherConfig(dataDir)
+  // Precedence: explicit env override > launcher config file > built-in default.
+  const configuredPort = Number(
+    process.env.PRINTANYWHERE_AGENT_PORT ?? launcherConfig.port ?? DEFAULT_UI_PORT,
+  )
+  const preferredPort =
+    Number.isInteger(configuredPort) && configuredPort > 0 && configuredPort < 65536
+      ? configuredPort
+      : DEFAULT_UI_PORT
+
+  const { key, cert } = await ensureLocalCert(dataDir)
+
+  return new Promise<{ close: () => Promise<void> }>((resolve, reject) => {
+    // Generate at most a handful of fallback candidates above the preferred
+    // port. The stale-listener reclaim in start-agent-background.ps1 frees a
+    // stale *agent* listener before launch, so this only fires when the port
+    // is genuinely held by an unrelated process.
+    const MAX_PORT_FALLBACK = 16
+
+    const listenOn = (port: number, attemptsLeft: number) => {
+      const server = createHttpsServer({ key, cert }, app)
+
+      server.once('error', (error: NodeJS.ErrnoException) => {
+        if (error.code === 'EADDRINUSE' && attemptsLeft > 0) {
+          console.warn(
+            `PrintAnywhere Agent UI: port ${port} is in use, trying ${port + 1}…`,
+          )
+          listenOn(port + 1, attemptsLeft - 1)
+          return
+        }
+        reject(error)
       })
-    })
+
+      server.listen(port, '127.0.0.1', () => {
+        // Persist the *actual* port so the launcher opens the right URL even
+        // after a fallback. Best-effort: a write failure must not stop the UI.
+        try {
+          writeUiRuntimeInfo(dataDir, {
+            scheme: 'https',
+            port,
+            domain: LOCAL_UI_DOMAIN,
+            loopbackHost: '127.0.0.1',
+          })
+        } catch (error) {
+          console.warn('PrintAnywhere Agent UI: could not write ui-runtime.json:', error)
+        }
+        console.log(
+          `PrintAnywhere Agent UI listening on https://${LOCAL_UI_DOMAIN}:${port}` +
+            ` (loopback fallback https://127.0.0.1:${port})`,
+        )
+        resolve({
+          close: () =>
+            new Promise((closeResolve, closeReject) => {
+              server.close((error) => (error ? closeReject(error) : closeResolve()))
+            }),
+        })
+      })
+    }
+
+    listenOn(preferredPort, MAX_PORT_FALLBACK)
   })
 }
 

@@ -13,6 +13,58 @@ Add-Type -AssemblyName System.Drawing
 
 $script:TrayMutex = $null
 
+# KAN-165: the local console is now served over HTTPS with a per-host
+# self-signed certificate. The installer trusts that cert in the Windows
+# machine Root store, but the tray probes only ever target 127.0.0.1 on the
+# same machine — accept the local self-signed cert unconditionally for these
+# loopback-only health/refresh calls so the tray works even before/without
+# the trust-store import (e.g. a non-elevated first run).
+try {
+    [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+    [System.Net.ServicePointManager]::SecurityProtocol = `
+        [System.Net.SecurityProtocolType]::Tls12
+} catch {
+    # Older PowerShell hosts may not expose every member — non-fatal.
+}
+
+# Resolve the address the agent UI is actually reachable at. The agent writes
+# ui-runtime.json with the real port once it binds (it may fall back past a
+# busy port); ui-launcher.json holds the user-editable domain/localhost choice.
+function Get-AgentUiBaseUrl {
+    param([string]$DataDir, [int]$Port)
+
+    $uiHost = "local.printanywhere.dhruvantasystems.com"
+    $uiPort = $Port
+
+    if (-not [string]::IsNullOrWhiteSpace($DataDir)) {
+        $launcherConfigPath = Join-Path $DataDir "ui-launcher.json"
+        if (Test-Path $launcherConfigPath) {
+            try {
+                $launcherConfig = Get-Content $launcherConfigPath -Raw | ConvertFrom-Json
+                if ($launcherConfig.uiHost -eq "localhost") {
+                    $uiHost = "127.0.0.1"
+                }
+            } catch {
+                # Malformed config — keep the domain default.
+            }
+        }
+
+        $runtimeInfoPath = Join-Path $DataDir "ui-runtime.json"
+        if (Test-Path $runtimeInfoPath) {
+            try {
+                $runtimeInfo = Get-Content $runtimeInfoPath -Raw | ConvertFrom-Json
+                if ($runtimeInfo.port -gt 0) {
+                    $uiPort = [int]$runtimeInfo.port
+                }
+            } catch {
+                # File mid-write — keep the configured port.
+            }
+        }
+    }
+
+    return "https://$uiHost`:$uiPort"
+}
+
 function Stop-ExistingTrayControllers {
     $installRoot = Join-Path $env:LOCALAPPDATA "Dhruvanta Systems\PrintAnywhereAgent"
     $currentPid = $PID
@@ -58,7 +110,7 @@ $script:RestartAttempts = @()
 function Test-AgentHealth {
     try {
         $response = Invoke-RestMethod -UseBasicParsing `
-            -Uri "http://127.0.0.1:$Port/health" `
+            -Uri "https://127.0.0.1:$Port/health" `
             -TimeoutSec 5 `
             -ErrorAction Stop
         return $response
@@ -134,7 +186,7 @@ function Show-Balloon {
 
 function Refresh-Printers {
     try {
-        $page = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/" -TimeoutSec 5
+        $page = Invoke-WebRequest -UseBasicParsing -Uri "https://127.0.0.1:$Port/" -TimeoutSec 5
         $match = [regex]::Match($page.Content, 'name="uiToken" value="([^"]+)"')
         if (-not $match.Success) {
             throw "Local UI token was not found."
@@ -142,7 +194,7 @@ function Refresh-Printers {
         Invoke-WebRequest `
             -UseBasicParsing `
             -Method Post `
-            -Uri "http://127.0.0.1:$Port/actions/refresh" `
+            -Uri "https://127.0.0.1:$Port/actions/refresh" `
             -Body @{ uiToken = $match.Groups[1].Value } `
             -TimeoutSec 20 `
             -MaximumRedirection 0 `
@@ -174,7 +226,7 @@ $errorItem.Visible = $false
 $menu.Items.Add("-") | Out-Null
 
 $openItem = $menu.Items.Add("Open PrintAnywhere Agent")
-$openItem.Add_Click({ Start-Process "http://127.0.0.1:$Port" })
+$openItem.Add_Click({ Start-Process (Get-AgentUiBaseUrl -DataDir $DataDir -Port $Port) })
 
 $startItem = $menu.Items.Add("Start Agent")
 $startItem.Add_Click({
@@ -221,7 +273,7 @@ $exitItem.Add_Click({
 })
 
 $notifyIcon.ContextMenuStrip = $menu
-$notifyIcon.Add_DoubleClick({ Start-Process "http://127.0.0.1:$Port" })
+$notifyIcon.Add_DoubleClick({ Start-Process (Get-AgentUiBaseUrl -DataDir $DataDir -Port $Port) })
 
 $healthTimer = New-Object System.Windows.Forms.Timer
 $healthTimer.Interval = 30000

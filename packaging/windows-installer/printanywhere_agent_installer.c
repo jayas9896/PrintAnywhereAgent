@@ -12,7 +12,9 @@
 #endif
 
 #define INSTALL_ROOT_SUFFIX L"Dhruvanta Systems\\PrintAnywhereAgent"
-#define LOCAL_UI_URL L"http://127.0.0.1:43100"
+/* KAN-165: the local console is served over HTTPS at the loopback-pinned
+ * domain; the loopback URL still works as a fallback. */
+#define LOCAL_UI_URL L"https://local.printanywhere.dhruvantasystems.com:43100"
 #define BUFFER_CHARS 8192
 
 static void show_message(const wchar_t *title, const wchar_t *message, UINT flags) {

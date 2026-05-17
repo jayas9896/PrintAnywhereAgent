@@ -156,6 +156,12 @@ await copy(path.join(repoRoot, 'scripts', 'check-update.ps1'), path.join(bundleD
 await copy(path.join(repoRoot, 'scripts', 'uninstall-agent.ps1'), path.join(bundleDir, 'scripts', 'uninstall-agent.ps1'))
 await copy(path.join(repoRoot, 'scripts', 'install-release.ps1'), path.join(bundleDir, 'scripts', 'install-release.ps1'))
 await copy(path.join(repoRoot, 'scripts', 'discover-printers.ps1'), path.join(bundleDir, 'scripts', 'discover-printers.ps1'))
+// KAN-165: shared local-HTTPS install/uninstall helpers, dot-sourced by
+// install-release.ps1 and uninstall-agent.ps1.
+await copy(
+  path.join(repoRoot, 'scripts', 'lib', 'local-https-setup.ps1'),
+  path.join(bundleDir, 'scripts', 'lib', 'local-https-setup.ps1'),
+)
 await includeWindowsNodeRuntime()
 
 await run(commandName('npm'), ['ci', '--omit=dev'], bundleDir)
@@ -186,6 +192,7 @@ await writeText(
         'scripts/uninstall-agent.ps1',
         'scripts/install-release.ps1',
         'scripts/discover-printers.ps1',
+        'scripts/lib/local-https-setup.ps1',
         'scripts/restart-agent.ps1',
         'scripts/run-agent.ps1',
         'scripts/start-agent-background.ps1',

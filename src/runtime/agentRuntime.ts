@@ -42,6 +42,14 @@ export class AgentRuntime {
 
   constructor(private readonly store: AgentStore) {}
 
+  /**
+   * KAN-165: the agent data directory. The local-UI HTTPS layer needs it to
+   * locate the per-host TLS certificate and the launcher config file.
+   */
+  get dataDir(): string {
+    return this.store.dataDir
+  }
+
   async start() {
     this.machineKey = await deriveMachineKey(this.store.dataDir)
     this.legacyMachineKey = await deriveLegacyMachineKey()
