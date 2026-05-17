@@ -74,18 +74,34 @@ export function decryptJobPdf(
   return Buffer.concat([decipher.update(ciphertext), decipher.final()])
 }
 
+/** Signature scheme version sent in the X-Agent-Sig-Version header. */
+export const AGENT_SIG_VERSION = '2'
+
 /**
- * Signs a request for the X-Agent-Signature header.
- * Input covers timestamp, HTTP method, and path so replayed requests are rejected
- * by the backend's 5-minute clock-skew window even if the bearer token is captured.
+ * Signs a request for the X-Agent-Signature header (KAN-92, scheme v2).
+ *
+ * The signing input covers timestamp, HTTP method, path AND a SHA-256
+ * digest of the exact request body bytes:
+ *
+ *   `{timestampMs}\n{METHOD}\n{path}\n{sha256hex(body)}`
+ *
+ * Covering the body closes the v1 gap where a man-in-the-middle could
+ * swap the JSON payload while keeping a captured signature valid. The
+ * timestamp still bounds replays to the backend's 5-minute skew window.
+ *
+ * The body MUST be the exact string passed to `fetch(..., { body })`;
+ * for bodyless requests (GET/DELETE) pass an empty string so the hash is
+ * `sha256("")` — the backend signs the same uniform shape.
  */
 export function signRequest(
   timestampMs: number,
   method: string,
   path: string,
   signingSecretHex: string,
+  body: string = '',
 ): string {
-  const signingInput = `${timestampMs}\n${method.toUpperCase()}\n${path}`
+  const bodyHash = crypto.createHash('sha256').update(body, 'utf8').digest('hex')
+  const signingInput = `${timestampMs}\n${method.toUpperCase()}\n${path}\n${bodyHash}`
   const key = Buffer.from(signingSecretHex, 'hex')
   return crypto.createHmac('sha256', key).update(signingInput, 'utf8').digest('hex')
 }
