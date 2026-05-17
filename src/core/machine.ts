@@ -5,6 +5,10 @@ import fsSync from 'node:fs'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import {
+  defaultKeyMaterialProtector,
+  type KeyMaterialProtector,
+} from './dpapi.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -67,45 +71,113 @@ export async function deriveLegacyMachineKey() {
 const KEY_SALT_FILE = 'agent-key-salt.bin'
 const SECURE_FILE_MODE = 0o600
 const SECURE_DIR_MODE = 0o700
+/** Byte length of the raw per-install random salt. */
+const SALT_LENGTH = 32
 
 /**
- * Returns the per-install random 32-byte salt, generating and persisting it on
- * first run. The salt file is written 0600 inside the (0700) data directory,
- * so a local process that is not this user cannot read it — and therefore
- * cannot recompute the machine key. This is a genuine improvement over the
- * legacy public-identifier-only derivation (AG-M1).
- *
- * A full OS-keystore integration (Windows DPAPI) is tracked as a follow-up.
+ * KAN-62: magic header that marks a salt file whose payload is wrapped by an
+ * OS keystore protector (Windows DPAPI). A legacy KAN-60 salt file is exactly
+ * 32 raw bytes with no header, so the two formats are unambiguous:
+ *  - starts with `PADP1\n` → DPAPI-wrapped, the rest is the protected blob.
+ *  - exactly 32 bytes, no header → legacy plaintext salt (auto-migrated).
  */
-async function loadOrCreateKeySalt(dataDir: string): Promise<Buffer> {
+const SALT_WRAP_MAGIC = Buffer.from('PADP1\n', 'utf8')
+
+/** True when `raw` begins with the KAN-62 wrapped-salt magic header. */
+function isWrappedSalt(raw: Buffer): boolean {
+  return raw.length > SALT_WRAP_MAGIC.length && raw.subarray(0, SALT_WRAP_MAGIC.length).equals(SALT_WRAP_MAGIC)
+}
+
+/**
+ * KAN-62: returns the per-install random 32-byte salt, generating and
+ * persisting it on first run.
+ *
+ * The salt is the root of the at-rest key derivation, so it is itself the most
+ * sensitive on-disk material. KAN-60 stored it as a 32-byte plaintext file at
+ * 0600 — which still left it readable by *any* process running as the agent
+ * user. KAN-62 wraps it with the platform key-material protector:
+ *  - Windows: DPAPI (`ProtectedData`, CurrentUser scope) — the salt file can
+ *    only be unwrapped inside the logged-in Windows user session, even by the
+ *    same user a copy lifted to another machine is useless.
+ *  - non-Windows: passthrough — keeps the KAN-60 0600-plaintext behaviour so
+ *    the cross-platform build/CI is unaffected.
+ *
+ * Migration: an existing legacy 32-byte plaintext salt is read as-is, then
+ * immediately re-written in the wrapped format. A wrapped salt is unwrapped
+ * back to its 32 raw bytes. Both the file mode (0600) and the directory mode
+ * (0700) are still asserted as defence in depth.
+ */
+async function loadOrCreateKeySalt(
+  dataDir: string,
+  protector: KeyMaterialProtector,
+): Promise<Buffer> {
   const saltPath = path.join(dataDir, KEY_SALT_FILE)
   await fs.mkdir(dataDir, { recursive: true })
   await chmodIfExists(dataDir, SECURE_DIR_MODE)
+
+  let raw: Buffer | null = null
   try {
-    const existing = await fs.readFile(saltPath)
-    if (existing.length === 32) {
-      await chmodIfExists(saltPath, SECURE_FILE_MODE)
-      return existing
+    raw = await fs.readFile(saltPath)
+  } catch {
+    // No salt yet — fall through and create one.
+  }
+
+  if (raw) {
+    if (isWrappedSalt(raw)) {
+      // KAN-62 wrapped salt — unwrap it back to the 32 raw bytes.
+      try {
+        const salt = await protector.unprotect(raw.subarray(SALT_WRAP_MAGIC.length))
+        if (salt.length === SALT_LENGTH) {
+          await chmodIfExists(saltPath, SECURE_FILE_MODE)
+          return Buffer.from(salt)
+        }
+        // Unwrapped to the wrong length — treat as corrupt, regenerate below.
+      } catch {
+        // Unwrap failed (e.g. wrong Windows user / machine) — regenerate
+        // below. Pre-existing behaviour: a salt that cannot be recovered
+        // makes old blobs unreadable and the agent re-pairs rather than crash.
+      }
+    } else if (raw.length === SALT_LENGTH) {
+      // KAN-60 legacy plaintext salt — migrate it into the wrapped format.
+      await writeWrappedSalt(saltPath, raw, protector)
+      return raw
     }
     // A truncated/corrupt salt — fall through and regenerate.
-  } catch {
-    // No salt yet — create one.
   }
-  const salt = crypto.randomBytes(32)
-  await fs.writeFile(saltPath, salt, { mode: SECURE_FILE_MODE })
-  await chmodIfExists(saltPath, SECURE_FILE_MODE)
+
+  const salt = crypto.randomBytes(SALT_LENGTH)
+  await writeWrappedSalt(saltPath, salt, protector)
   return salt
+}
+
+/** Wrap a 32-byte salt with the protector and persist it 0600 with the magic header. */
+async function writeWrappedSalt(
+  saltPath: string,
+  salt: Buffer,
+  protector: KeyMaterialProtector,
+): Promise<void> {
+  const wrapped = await protector.protect(salt)
+  const file = Buffer.concat([SALT_WRAP_MAGIC, wrapped])
+  await fs.writeFile(saltPath, file, { mode: SECURE_FILE_MODE })
+  await chmodIfExists(saltPath, SECURE_FILE_MODE)
 }
 
 /**
  * Derives the AES-GCM key used to encrypt the agent secret + RSA private key
  * at rest. Combines the (public) machine id with a per-install random salt via
- * HKDF-SHA256. Without the 0600 salt file the key cannot be recomputed, so
- * other local processes can no longer trivially decrypt the stored material.
+ * HKDF-SHA256. The salt itself is wrapped in the OS keystore (KAN-62), so the
+ * key cannot be recomputed outside the logged-in Windows user session.
+ *
+ * `protector` is injectable purely so tests can exercise the wrap/migrate
+ * paths on Linux CI with a fake protector; production always uses the
+ * platform default.
  */
-export async function deriveMachineKey(dataDir: string): Promise<Buffer> {
+export async function deriveMachineKey(
+  dataDir: string,
+  protector: KeyMaterialProtector = defaultKeyMaterialProtector(),
+): Promise<Buffer> {
   const machineId = await getMachineId()
-  const salt = await loadOrCreateKeySalt(dataDir)
+  const salt = await loadOrCreateKeySalt(dataDir, protector)
   const derived = crypto.hkdfSync(
     'sha256',
     Buffer.from(`printanywhere-agent:${machineId}`, 'utf8'),
@@ -115,6 +187,8 @@ export async function deriveMachineKey(dataDir: string): Promise<Buffer> {
   )
   return Buffer.from(derived)
 }
+
+export { loadOrCreateKeySalt, isWrappedSalt, SALT_WRAP_MAGIC, KEY_SALT_FILE, SALT_LENGTH }
 
 /** chmod a path if it exists; POSIX modes are a no-op on Windows but harmless. */
 export async function chmodIfExists(targetPath: string, mode: number): Promise<void> {
