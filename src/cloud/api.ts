@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { signRequest } from '../core/crypto.js'
+import { AGENT_SIG_VERSION, signRequest } from '../core/crypto.js'
 import type {
   AgentJobQueueStatus,
   AgentPrinterStatus,
@@ -227,12 +227,31 @@ export class CloudApiClient {
     private readonly getSigningSecret: (() => string | null | undefined) | null = null,
   ) {}
 
-  private signedHeaders(method: string, path: string, extra: Record<string, string> = {}): Record<string, string> {
+  /**
+   * Builds the HMAC headers for an agent request (KAN-92, scheme v2).
+   *
+   * `body` MUST be the exact string passed to `fetch(..., { body })` so
+   * the body digest the agent signs matches the bytes the backend
+   * receives. For bodyless requests (GET / DELETE) omit it — the empty
+   * default hashes to `sha256("")`, the same uniform shape the backend
+   * verifies.
+   */
+  private signedHeaders(
+    method: string,
+    path: string,
+    body = '',
+    extra: Record<string, string> = {},
+  ): Record<string, string> {
     const secret = this.getSigningSecret?.()
     if (!secret) return extra
     const ts = Date.now()
-    const sig = signRequest(ts, method, path, secret)
-    return { ...extra, 'X-Agent-Timestamp': String(ts), 'X-Agent-Signature': sig }
+    const sig = signRequest(ts, method, path, secret, body)
+    return {
+      ...extra,
+      'X-Agent-Sig-Version': AGENT_SIG_VERSION,
+      'X-Agent-Timestamp': String(ts),
+      'X-Agent-Signature': sig,
+    }
   }
 
   async register(payload: {
@@ -255,14 +274,15 @@ export class CloudApiClient {
 
   async reportPrinters(agentSecret: string, printers: LocalPrinter[]) {
     const path = '/api/agent/printers'
+    const body = JSON.stringify({ printers })
     const response = await fetch(`${this.serverUrl}${path}`, {
       method: 'POST',
       headers: {
         authorization: `Bearer ${agentSecret}`,
         'content-type': 'application/json',
-        ...this.signedHeaders('POST', path),
+        ...this.signedHeaders('POST', path, body),
       },
-      body: JSON.stringify({ printers }),
+      body,
     })
     if (!response.ok) {
       throw apiError(response, await response.text())
@@ -322,14 +342,15 @@ export class CloudApiClient {
     },
   ) {
     const path = `/api/agent/jobs/${jobId}/status`
+    const body = JSON.stringify(payload)
     const response = await fetch(`${this.serverUrl}${path}`, {
       method: 'PUT',
       headers: {
         authorization: `Bearer ${agentSecret}`,
         'content-type': 'application/json',
-        ...this.signedHeaders('PUT', path),
+        ...this.signedHeaders('PUT', path, body),
       },
-      body: JSON.stringify(payload),
+      body,
     })
     if (!response.ok) {
       throw apiError(response, await response.text())
@@ -359,14 +380,15 @@ export class CloudApiClient {
     },
   ) {
     const path = '/api/agent/heartbeat'
+    const body = JSON.stringify(payload)
     const response = await fetch(`${this.serverUrl}${path}`, {
       method: 'POST',
       headers: {
         authorization: `Bearer ${agentSecret}`,
         'content-type': 'application/json',
-        ...this.signedHeaders('POST', path),
+        ...this.signedHeaders('POST', path, body),
       },
-      body: JSON.stringify(payload),
+      body,
     })
     if (!response.ok) throw apiError(response, await response.text())
     return response.json()
@@ -416,14 +438,15 @@ export class CloudApiClient {
 
   async createPlatformPrinter(agentSecret: string, payload: PlatformPrinterUpsertPayload) {
     const path = '/api/agent/platform-printers'
+    const body = JSON.stringify(this.serializePlatformPrinterPayload(payload))
     const response = await fetch(`${this.serverUrl}${path}`, {
       method: 'POST',
       headers: {
         authorization: `Bearer ${agentSecret}`,
         'content-type': 'application/json',
-        ...this.signedHeaders('POST', path),
+        ...this.signedHeaders('POST', path, body),
       },
-      body: JSON.stringify(this.serializePlatformPrinterPayload(payload)),
+      body,
     })
     if (!response.ok) throw apiError(response, await response.text())
     return platformPrinterSchema.parse(await response.json())
@@ -431,14 +454,15 @@ export class CloudApiClient {
 
   async updatePlatformPrinter(agentSecret: string, printerId: string, payload: PlatformPrinterUpsertPayload) {
     const path = `/api/agent/platform-printers/${printerId}`
+    const body = JSON.stringify(this.serializePlatformPrinterPayload(payload))
     const response = await fetch(`${this.serverUrl}${path}`, {
       method: 'PUT',
       headers: {
         authorization: `Bearer ${agentSecret}`,
         'content-type': 'application/json',
-        ...this.signedHeaders('PUT', path),
+        ...this.signedHeaders('PUT', path, body),
       },
-      body: JSON.stringify(this.serializePlatformPrinterPayload(payload)),
+      body,
     })
     if (!response.ok) throw apiError(response, await response.text())
     return platformPrinterSchema.parse(await response.json())
@@ -483,14 +507,15 @@ export class CloudApiClient {
 
   async createCoupon(agentSecret: string, payload: AgentCouponUpsertPayload): Promise<AgentCoupon> {
     const path = '/api/agent/coupons'
+    const body = JSON.stringify(payload)
     const response = await fetch(`${this.serverUrl}${path}`, {
       method: 'POST',
       headers: {
         authorization: `Bearer ${agentSecret}`,
         'content-type': 'application/json',
-        ...this.signedHeaders('POST', path),
+        ...this.signedHeaders('POST', path, body),
       },
-      body: JSON.stringify(payload),
+      body,
     })
     if (!response.ok) throw apiError(response, await response.text())
     return agentCouponSchema.parse(await response.json())
@@ -498,14 +523,15 @@ export class CloudApiClient {
 
   async updateCoupon(agentSecret: string, couponId: string, payload: AgentCouponUpsertPayload): Promise<AgentCoupon> {
     const path = `/api/agent/coupons/${couponId}`
+    const body = JSON.stringify(payload)
     const response = await fetch(`${this.serverUrl}${path}`, {
       method: 'PUT',
       headers: {
         authorization: `Bearer ${agentSecret}`,
         'content-type': 'application/json',
-        ...this.signedHeaders('PUT', path),
+        ...this.signedHeaders('PUT', path, body),
       },
-      body: JSON.stringify(payload),
+      body,
     })
     if (!response.ok) throw apiError(response, await response.text())
     return agentCouponSchema.parse(await response.json())
@@ -513,14 +539,15 @@ export class CloudApiClient {
 
   async setCouponActive(agentSecret: string, couponId: string, active: boolean): Promise<AgentCoupon> {
     const path = `/api/agent/coupons/${couponId}/active`
+    const body = JSON.stringify({ active })
     const response = await fetch(`${this.serverUrl}${path}`, {
       method: 'PATCH',
       headers: {
         authorization: `Bearer ${agentSecret}`,
         'content-type': 'application/json',
-        ...this.signedHeaders('PATCH', path),
+        ...this.signedHeaders('PATCH', path, body),
       },
-      body: JSON.stringify({ active }),
+      body,
     })
     if (!response.ok) throw apiError(response, await response.text())
     return agentCouponSchema.parse(await response.json())
