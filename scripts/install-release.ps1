@@ -11,6 +11,9 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $repoRoot
 
+# KAN-165: local HTTPS UI setup (per-host cert, trust store, hosts entry).
+. (Join-Path $PSScriptRoot "lib\local-https-setup.ps1")
+
 $isWindowsPlatform = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
     [System.Runtime.InteropServices.OSPlatform]::Windows
 )
@@ -306,6 +309,16 @@ if ((Test-Path $envExamplePath) -and (-not (Test-Path $envFilePath))) {
     Write-Host "Created config\\agent.env from the example file."
 }
 
+# KAN-165: provision the per-host TLS certificate, trust it, add the hosts-file
+# entry, and seed the launcher config. Run before ACL hardening so the new
+# files in the data dir are covered by the lockdown below.
+try {
+    Install-LocalHttpsUi -NodeCommand $nodeCommand -RepoRoot $repoRoot -DataDir $DataDir
+} catch {
+    Write-Warning "Local HTTPS UI setup did not fully complete: $($_.Exception.Message)"
+    Write-Warning "The agent will still serve the console; the browser may show a certificate warning or you may need to open https://127.0.0.1:$Port directly."
+}
+
 if (Test-ManagedPerUserInstall -RepoRoot $repoRoot) {
     $installRoot = Split-Path -Parent $repoRoot
     Protect-AgentPath -Path $installRoot
@@ -415,7 +428,8 @@ Write-Host "Next steps:"
 Write-Host "1. Review config\\agent.env if you want to change the port, data folder, or simulation mode."
 Write-Host "2. Start the agent with start-agent.cmd, the Desktop shortcut, or:"
 Write-Host "   powershell -ExecutionPolicy Bypass -WindowStyle Hidden -File .\\scripts\\start-agent-background.ps1 -EnvFile `"$envFilePath`" -DataDir `"$DataDir`" -Port $Port -OpenUi"
-Write-Host "3. Use the tray icon or http://127.0.0.1:$Port for refresh, health, and printer publishing."
+Write-Host "3. Use the tray icon or https://local.printanywhere.dhruvantasystems.com:$Port (loopback fallback https://127.0.0.1:$Port) for refresh, health, and printer publishing."
+Write-Host "   If the domain address has trouble on your network, support can set `"uiHost`": `"localhost`" in $DataDir\ui-launcher.json."
 Write-Host "4. The production backend URL is prefilled as https://api.dhruvantasystems.net/printanywhere."
 Write-Host "5. Click Save and register, then share the pairing code with the PrintAnywhere admin so they can verify and approve this machine."
 Write-Host "6. After approval, publish or update your customer-facing printers from the local Agent UI."

@@ -77,7 +77,7 @@ On the shop PC, use the release bundle rather than the full source repo:
 
 5. Review `config\agent.env` if you want to change the local UI port, data directory, or simulation mode.
 6. Start the agent with the Desktop shortcut, Start Menu shortcut, tray menu, or `start-agent.cmd`. These start the runtime hidden instead of keeping a terminal window on top.
-7. Open `http://127.0.0.1:43100`.
+7. Open `https://local.printanywhere.dhruvantasystems.com:43100` (the loopback fallback `https://127.0.0.1:43100` also works).
 8. The production backend URL is prefilled as `https://api.dhruvantasystems.net/printanywhere`; change it only for local testing or support-directed override.
 9. Click `Save and register`; allow the browser location prompt when the machine can share device location for admin verification.
 10. Give the pairing code to the PrintAnywhere admin.
@@ -116,7 +116,41 @@ powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap-windows.ps1
 
 Default local UI:
 
-- `http://127.0.0.1:43100`
+- `https://local.printanywhere.dhruvantasystems.com:43100`
+- Loopback fallback: `https://127.0.0.1:43100`
+
+## Local UI Address (KAN-165)
+
+The local console is served over HTTPS at
+`https://local.printanywhere.dhruvantasystems.com:<port>` for a professional,
+genuine-looking address. The mechanics:
+
+- **Per-host certificate.** Every install generates its **own** self-signed
+  TLS certificate + private key (no shared key — this repo is public, so no key
+  is ever committed). The key + cert live in the agent data directory under
+  `tls\`. The installer trusts the certificate in the Windows machine `Root`
+  store so the browser shows no warning.
+- **Name resolution.** The installer adds a hosts-file entry
+  `127.0.0.1 local.printanywhere.dhruvantasystems.com`. The domain therefore
+  always resolves to loopback — the UI never leaves the machine.
+- **Loopback fallback.** The certificate also covers `127.0.0.1` and
+  `localhost`, so `https://127.0.0.1:<port>` keeps working as a fallback.
+- **Launcher config.** A small, user-editable file `ui-launcher.json` lives in
+  the agent data directory:
+
+  ```json
+  {
+    "uiHost": "domain",
+    "port": 43100
+  }
+  ```
+
+  Set `"uiHost"` to `"localhost"` (with support's help) if the domain address
+  has trouble on a particular network — the launcher will then open
+  `https://127.0.0.1:<port>` instead. The file carries a comment header
+  explaining each field. If port `43100` is occupied the agent automatically
+  picks the next free port and the launcher reads the actual port from
+  `ui-runtime.json`.
 
 ## Runtime Model
 

@@ -98,9 +98,16 @@ That script:
 
 ## Local Configuration
 
-Default local UI:
+Default local UI (served over HTTPS, KAN-165):
 
-- `http://127.0.0.1:43100`
+- `https://local.printanywhere.dhruvantasystems.com:43100`
+- Loopback fallback: `https://127.0.0.1:43100`
+
+The installer generates a per-host TLS certificate, trusts it in the Windows
+machine `Root` store, and adds a `127.0.0.1 local.printanywhere.dhruvantasystems.com`
+hosts-file entry. To make the launcher open the loopback address instead of the
+domain (e.g. if the domain has trouble on a network), set `"uiHost": "localhost"`
+in `ui-launcher.json` in the agent data directory.
 
 Optional local overrides live in:
 

@@ -10,6 +10,9 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 
+# KAN-165: helpers to untrust the local UI cert and remove the hosts entry.
+. (Join-Path $PSScriptRoot "lib\local-https-setup.ps1")
+
 function Show-Message {
     param(
         [string]$Message,
@@ -104,6 +107,15 @@ try {
     & (Join-Path $PSScriptRoot "stop-agent.ps1") -Port $Port
 } catch {
     Write-Warning "Could not stop the background agent cleanly: $($_.Exception.Message)"
+}
+
+# KAN-165: untrust the local UI certificate and remove the hosts-file entry so
+# no stale trusted cert or hosts line is left behind. Done while the data dir
+# still exists (the thumbprint is read from it).
+try {
+    Uninstall-LocalHttpsUi -DataDir $DataDir
+} catch {
+    Write-Warning "Could not fully clean up the local HTTPS UI setup: $($_.Exception.Message)"
 }
 
 $currentPid = $PID

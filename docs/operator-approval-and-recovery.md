@@ -41,7 +41,7 @@ The following are controlled by the platform admin only:
 
 1. Install the release bundle or run the source checkout bootstrap.
 2. Start the agent.
-3. Open the local UI at `http://127.0.0.1:43100` unless you changed the port.
+3. Open the local UI at `https://local.printanywhere.dhruvantasystems.com:43100` (loopback fallback `https://127.0.0.1:43100`) unless you changed the port.
 4. Keep the prefilled production backend URL unless support tells you otherwise:
    `https://api.dhruvantasystems.net/printanywhere`.
 5. Optionally set a machine display name.
