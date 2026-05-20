@@ -18,12 +18,12 @@
  * UI server in-process so the new cert is picked up". The runtime today does
  * not surface a restart handle (the UI server's `{ close }` is held by
  * `src/index.ts`, not the runtime); the repair action therefore returns a
- * "Restart the agent to finish" notice. A follow-up ticket (KAN-300, filed
- * by this PR) tracks plumbing the restart handle through the runtime.
+ * "Restart the agent to finish" notice. A follow-up Jira ticket should be
+ * filed (post-merge) to plumb a restart handle through the runtime.
  */
 
 import { spawn } from 'node:child_process'
-import { accessSync, constants, existsSync } from 'node:fs'
+import { closeSync, existsSync, openSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { hostsFilePath } from './localHttpsHealth.js'
@@ -46,23 +46,39 @@ export interface LocalHttpsRepairResult {
 }
 
 /**
- * KAN-294: best-effort elevation probe on Windows. We try to open the hosts
- * file for append — a non-admin process gets `EACCES`/`EPERM` immediately
- * with no side effects, which is a reliable enough signal to short-circuit
- * the action with a friendly "Run as Administrator" message before paying
- * the cost of spawning PowerShell. On non-Windows hosts (local dev), we
- * always report "elevation not required".
+ * KAN-294: best-effort elevation probe on Windows. We open the hosts file
+ * with `r+` (read/write) — a non-admin process fails with `EACCES`/`EPERM`
+ * immediately, which is a reliable signal to short-circuit the action with
+ * a friendly "Run as Administrator" message before paying the cost of
+ * spawning PowerShell.
+ *
+ * **Why not `accessSync(file, W_OK)`?** Per the Node docs, `fs.access` on
+ * Windows does NOT consult ACLs — it only checks the read-only attribute.
+ * The hosts file is not marked read-only, so `accessSync(.., W_OK)` would
+ * return success on a non-admin process and the user would then see the
+ * raw PowerShell stderr instead of the friendly elevation prompt this
+ * function exists to surface. `openSync(file, 'r+')` does the real check.
+ *
+ * On non-Windows hosts (local dev) we always return `true`.
  */
 export function probeElevation(): boolean {
   if (process.platform !== 'win32') return true
+  let fd = -1
   try {
-    // `constants.W_OK` is a strong-enough proxy on Windows — the hosts file
-    // grants Modify only to Administrators and SYSTEM. `accessSync` does
-    // not actually write anything.
-    accessSync(hostsFilePath(), constants.W_OK)
+    // `r+` = open existing for read+write. No content is changed.
+    fd = openSync(hostsFilePath(), 'r+')
     return true
   } catch {
     return false
+  } finally {
+    if (fd >= 0) {
+      try {
+        closeSync(fd)
+      } catch {
+        // Closing a freshly-opened descriptor cannot meaningfully fail; if
+        // it does, the descriptor will leak briefly until process exit.
+      }
+    }
   }
 }
 
