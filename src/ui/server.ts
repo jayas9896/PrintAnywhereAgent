@@ -25,7 +25,14 @@ import type { AgentCouponUpsertPayload } from '../cloud/api.js'
 import { AGENT_VERSION, defaultPrintAnywhereBackendUrl } from '../config/defaults.js'
 import type { AgentRuntime, PlatformPrinterUpsertInput } from '../runtime/agentRuntime.js'
 import { LOCAL_UI_DOMAIN, ensureLocalCert } from './localHttps.js'
-import { DEFAULT_UI_PORT, readLauncherConfig, writeUiRuntimeInfo } from './launcherConfig.js'
+import {
+  DEFAULT_UI_PORT,
+  readLauncherConfig,
+  resetLauncherConfigIfMajorUpgrade,
+  writeUiRuntimeInfo,
+} from './launcherConfig.js'
+import { evaluateLocalUiDomainHealth } from './localHttpsHealth.js'
+import { runLocalHttpsRepair } from './localHttpsRepair.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -2912,6 +2919,19 @@ async function storeBrandingLogo(
 export async function startUiServer(runtime: AgentRuntime) {
   const app = express()
 
+  // KAN-294: launcher config is needed both up here (for the dashboard
+  // health banner) and below at server-bind time. Read it once and reuse.
+  // The major-upgrade reset (KAN-294) runs before every read so a stale
+  // `uiHost: "localhost"` from a prior major install does not silently
+  // downgrade this release.
+  const startupDataDir = runtime.dataDir
+  try {
+    resetLauncherConfigIfMajorUpgrade(startupDataDir, AGENT_VERSION)
+  } catch (error) {
+    console.warn('PrintAnywhere Agent UI: major-upgrade reset check failed:', error)
+  }
+  const startupLauncherConfig = readLauncherConfig(startupDataDir)
+
   app.use((_request, response, next) => {
     response.setHeader('X-Frame-Options', 'DENY')
     response.setHeader('X-Content-Type-Options', 'nosniff')
@@ -3012,6 +3032,16 @@ export async function startUiServer(runtime: AgentRuntime) {
     // screen is already a focused experience and carries its own messaging.
     const lifecycleBanner = selectLifecycleBanner(profile)
 
+    // KAN-294: loud-fallback banner — when the launcher is configured to use
+    // the `local.printanywhere.dhruvantasystems.com` domain but the
+    // underlying support (hosts entry, per-host cert) is missing, surface a
+    // prominent banner with a "Repair local URL setup" button so the
+    // operator never has to wonder why the URL is wrong.
+    const domainHealth = evaluateLocalUiDomainHealth({
+      dataDir: startupDataDir,
+      uiHost: startupLauncherConfig.uiHost,
+    })
+
     const content = `
       <div>
         <div class="page-eyebrow">Agent console</div>
@@ -3023,6 +3053,19 @@ export async function startUiServer(runtime: AgentRuntime) {
             title: lifecycleBanner.title,
             body: lifecycleBanner.body,
           })}</div>`
+        : ''}
+      ${!domainHealth.ok
+        ? `<div id="local-https-banner" class="state-banner state-banner-warning" role="status" aria-live="polite">
+            <span class="state-banner-icon" aria-hidden="true">⚠</span>
+            <span class="state-banner-body">
+              <span class="state-banner-title">Local domain not configured</span>
+              <span class="state-banner-text">${htmlEscape(domainHealth.reason)}</span>
+              <form method="post" action="/actions/repair-local-https" class="js-pending-form" style="margin-top:8px;">
+                ${hiddenUiToken(snapshot.uiToken)}
+                <button type="submit" class="btn btn-primary">Repair local URL setup</button>
+              </form>
+            </span>
+          </div>`
         : ''}
 
       <div class="card">
@@ -3943,6 +3986,32 @@ export async function startUiServer(runtime: AgentRuntime) {
     }
   })
 
+  // KAN-294: "Repair local URL setup" action — wired to the loud-fallback
+  // banner on the dashboard. Verifies the hosts-file entry, reinstalls the
+  // per-host self-signed cert, and (per the deviation noted in
+  // localHttpsRepair.ts) asks the operator to restart the agent to finish
+  // picking up the new certificate. Surfaces the elevation requirement
+  // clearly so the operator does not silently fail again.
+  app.post('/actions/repair-local-https', async (request, response) => {
+    if (!verifyUiRequest(runtime, request, response)) return
+    try {
+      const result = await runLocalHttpsRepair({ dataDir: startupDataDir })
+      if (!result.ok) {
+        console.warn(
+          'PrintAnywhere Agent UI: local-https repair failed:',
+          ...result.details,
+        )
+      }
+      redirectWithStatus(response, result.ok ? 'notice' : 'error', result.message)
+    } catch (error) {
+      redirectWithStatus(
+        response,
+        'error',
+        error instanceof Error ? error.message : 'Could not run the local URL repair.',
+      )
+    }
+  })
+
   app.post('/actions/refresh', async (request, response) => {
     if (!verifyUiRequest(runtime, request, response)) return
     try {
@@ -4113,8 +4182,8 @@ export async function startUiServer(runtime: AgentRuntime) {
   // `https://local.printanywhere.dhruvantasystems.com:<port>`. The same socket
   // also answers `127.0.0.1` / `localhost` (the domain is a hosts-file alias
   // for 127.0.0.1) so the loopback fallback stays fully functional.
-  const dataDir = runtime.dataDir
-  const launcherConfig = readLauncherConfig(dataDir)
+  const dataDir = startupDataDir
+  const launcherConfig = startupLauncherConfig
   // Precedence: explicit env override > launcher config file > built-in default.
   const configuredPort = Number(
     process.env.PRINTANYWHERE_AGENT_PORT ?? launcherConfig.port ?? DEFAULT_UI_PORT,

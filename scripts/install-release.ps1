@@ -312,11 +312,69 @@ if ((Test-Path $envExamplePath) -and (-not (Test-Path $envFilePath))) {
 # KAN-165: provision the per-host TLS certificate, trust it, add the hosts-file
 # entry, and seed the launcher config. Run before ACL hardening so the new
 # files in the data dir are covered by the lockdown below.
+#
+# KAN-294: explicit, verbose logging + a post-install smoke check. If the
+# admin elevation step was declined the user would previously silently end up
+# with a half-applied setup that points at http://127.0.0.1 instead of the
+# professional https domain — make that loud, with the remediation in the
+# message instead of buried in support logs.
+function Test-IsElevated {
+    try {
+        $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+        $principal = New-Object System.Security.Principal.WindowsPrincipal($identity)
+        return $principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
+    } catch {
+        return $false
+    }
+}
+
+$elevated = Test-IsElevated
+if ($elevated) {
+    Write-Host "Local HTTPS UI setup: running with administrator privileges."
+} else {
+    Write-Warning "Local HTTPS UI setup: this PowerShell session is NOT elevated. The hosts-file edit and certificate trust step will be skipped or fail."
+    Write-Warning "Re-run the installer as administrator (right-click -> Run as administrator) to finish the local domain setup."
+}
+
 try {
     Install-LocalHttpsUi -NodeCommand $nodeCommand -RepoRoot $repoRoot -DataDir $DataDir
 } catch {
     Write-Warning "Local HTTPS UI setup did not fully complete: $($_.Exception.Message)"
     Write-Warning "The agent will still serve the console; the browser may show a certificate warning or you may need to open https://127.0.0.1:$Port directly."
+}
+
+# KAN-294 — post-install smoke check. Verify the two pieces of state the local
+# domain depends on are actually in place: the hosts-file entry and the
+# per-host cert file. We do not curl the URL itself here because the agent
+# isn't started yet — that probe happens once start-agent-background.ps1
+# launches the runtime. If we DID elevate and these checks still fail, that's
+# a genuine install regression worth halting on; if we did NOT elevate, the
+# operator already saw a clear warning above and the agent will still serve
+# https://127.0.0.1:$Port — so we degrade to a warning rather than failing
+# an unrelated user's install.
+$localUiDomain = "local.printanywhere.dhruvantasystems.com"
+$hostsFile = Join-Path $env:SystemRoot "System32\drivers\etc\hosts"
+$hostsOk = $false
+if (Test-Path $hostsFile) {
+    foreach ($line in (Get-Content -LiteralPath $hostsFile -ErrorAction SilentlyContinue)) {
+        if ($line -match "^\s*(127\.0\.0\.1|::1)\s+.*\b$([Regex]::Escape($localUiDomain))\b") {
+            $hostsOk = $true
+            break
+        }
+    }
+}
+
+$certPath = Join-Path $DataDir "tls\local-ui-cert.pem"
+$keyPath = Join-Path $DataDir "tls\local-ui-key.pem"
+$certOk = (Test-Path $certPath) -and (Test-Path $keyPath)
+
+if ($hostsOk -and $certOk) {
+    Write-Host "Local HTTPS UI smoke check: hosts entry present, per-host certificate present."
+} elseif ($elevated) {
+    Write-Error "Local HTTPS UI smoke check FAILED after an elevated install (hostsOk=$hostsOk, certOk=$certOk). The local domain https://$localUiDomain`:$Port will not work. Open the agent's local UI as administrator and click 'Repair local URL setup', or contact support."
+    throw "Local HTTPS UI smoke check failed."
+} else {
+    Write-Warning "Local HTTPS UI smoke check: hostsOk=$hostsOk, certOk=$certOk. The agent will still serve https://127.0.0.1:$Port. Re-run the installer as administrator, or after first launch click 'Repair local URL setup' on the agent dashboard."
 }
 
 if (Test-ManagedPerUserInstall -RepoRoot $repoRoot) {
