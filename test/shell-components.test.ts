@@ -4,6 +4,8 @@ import {
   computeConnectionState,
   connectionPill,
   emptyState,
+  renderAgentHealthBanner,
+  selectAgentHealthVariant,
   stateBanner,
   tableEmptyState,
 } from '../src/ui/server.ts'
@@ -134,4 +136,89 @@ test('tableEmptyState carries an inline Refresh action through', () => {
   })
   assert.match(html, /action="\/actions\/refresh"/)
   assert.match(html, /Refresh printers/)
+})
+
+// ===========================================================================
+// KAN-295: agent health header banner — variant selection rules
+// ===========================================================================
+
+test('selectAgentHealthVariant returns error when the agent is unregistered', () => {
+  const verdict = selectAgentHealthVariant({
+    connection: { state: 'unregistered', ageSeconds: null, label: 'Not registered', detail: '' },
+    lastError: null,
+  })
+  assert.equal(verdict.variant, 'error')
+  assert.match(verdict.title, /Not paired/i)
+})
+
+test('selectAgentHealthVariant returns error when the agent is disconnected', () => {
+  const verdict = selectAgentHealthVariant({
+    connection: { state: 'disconnected', ageSeconds: 600, label: 'Disconnected', detail: 'No sync for 10 minutes' },
+    lastError: null,
+  })
+  assert.equal(verdict.variant, 'error')
+  assert.match(verdict.detail, /10 minutes/)
+})
+
+test('selectAgentHealthVariant returns warning when a connected agent has a lastError', () => {
+  const verdict = selectAgentHealthVariant({
+    connection: { state: 'connected', ageSeconds: 5, label: 'Connected', detail: 'Last synced 5s ago.' },
+    lastError: 'PDF parse failed',
+  })
+  assert.equal(verdict.variant, 'warning')
+  assert.match(verdict.detail, /PDF parse failed/)
+})
+
+test('selectAgentHealthVariant returns warning when the connection is stale', () => {
+  const verdict = selectAgentHealthVariant({
+    connection: { state: 'stale', ageSeconds: 200, label: 'Connection delayed', detail: 'slow' },
+    lastError: null,
+  })
+  assert.equal(verdict.variant, 'warning')
+})
+
+test('selectAgentHealthVariant returns good when paired + fresh heartbeat + no error', () => {
+  const verdict = selectAgentHealthVariant({
+    connection: { state: 'connected', ageSeconds: 5, label: 'Connected', detail: 'Last synced 5s ago.' },
+    lastError: null,
+  })
+  assert.equal(verdict.variant, 'good')
+  assert.match(verdict.title, /healthy/i)
+})
+
+test('renderAgentHealthBanner surfaces all three fact tiles', () => {
+  const html = renderAgentHealthBanner({
+    connection: { state: 'connected', ageSeconds: 5, label: 'Connected', detail: 'Last synced 5s ago.' },
+    lastError: null,
+    lastHeartbeatLabel: '2026-05-20T10:00:00Z',
+    lastJobLabel: 'job-1 · Completed',
+  })
+  assert.match(html, /Last heartbeat/)
+  assert.match(html, /2026-05-20T10:00:00Z/)
+  assert.match(html, /Last error/)
+  assert.match(html, /None/)
+  assert.match(html, /Last job/)
+  assert.match(html, /job-1 · Completed/)
+})
+
+test('renderAgentHealthBanner error variant uses role=alert', () => {
+  const html = renderAgentHealthBanner({
+    connection: { state: 'unregistered', ageSeconds: null, label: 'Not registered', detail: '' },
+    lastError: null,
+    lastHeartbeatLabel: '—',
+    lastJobLabel: 'None',
+  })
+  assert.match(html, /role="alert"/)
+  assert.match(html, /is-error/)
+})
+
+test('renderAgentHealthBanner non-error variant uses role=status', () => {
+  const html = renderAgentHealthBanner({
+    connection: { state: 'connected', ageSeconds: 5, label: 'Connected', detail: 'fresh' },
+    lastError: null,
+    lastHeartbeatLabel: 'now',
+    lastJobLabel: 'None',
+  })
+  assert.match(html, /role="status"/)
+  assert.match(html, /is-good/)
 })

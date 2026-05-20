@@ -33,6 +33,11 @@ import {
 } from './launcherConfig.js'
 import { evaluateLocalUiDomainHealth } from './localHttpsHealth.js'
 import { runLocalHttpsRepair } from './localHttpsRepair.js'
+import {
+  RECOMMENDED_SECURE_COVER_SWATCHES,
+  parseHexColor,
+  resolvePreviewHex,
+} from './secureCoverColors.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -1286,6 +1291,144 @@ const SHARED_CSS = `
   .site-footer { background: var(--brand); color: rgba(255,255,255,.5); font-size: 12px; padding: 14px 24px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-shrink: 0; }
   .site-footer a { color: rgba(255,255,255,.65); text-decoration: none; }
   .site-footer a:hover { color: #fff; }
+
+  /* =========================================================================
+   * KAN-295: Console UI overhaul — agent health header, dirty-aware forms,
+   * inline save toast, secure-cover colour picker (HEX + RGB sliders +
+   * native picker + recommended swatch chips), and the "field group" card
+   * layout used to re-flow settings sections.
+   * =======================================================================*/
+
+  /* Agent health header — a one-glance summary of the agent's current state.
+   * Replaces the wall-of-text "Last heartbeat / Last error / Last job" panel.
+   * The variant is computed server-side (see agentHealthBanner()) and the
+   * three at-a-glance facts (heartbeat / error / last job) are surfaced as
+   * stat tiles inside the same card so they remain inspectable on demand. */
+  .agent-health {
+    display: grid; gap: var(--space-4);
+    border: 1px solid var(--border); border-radius: var(--radius-md);
+    padding: var(--space-4) var(--space-5); background: var(--surface);
+    box-shadow: var(--shadow);
+  }
+  .agent-health-row { display: flex; gap: var(--space-3); align-items: flex-start; }
+  .agent-health-icon {
+    flex-shrink: 0; width: 36px; height: 36px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; font-weight: var(--font-weight-bold);
+  }
+  .agent-health-body { flex: 1; min-width: 0; }
+  .agent-health-title { font-size: var(--text-md); font-weight: var(--font-weight-bold); line-height: var(--leading-tight); }
+  .agent-health-text { font-size: var(--text-sm); color: var(--muted); margin-top: 2px; line-height: var(--leading-normal); }
+  .agent-health.is-good { border-left: 4px solid var(--status-good-fg); }
+  .agent-health.is-good .agent-health-icon { background: var(--status-good-bg); color: var(--status-good-fg); }
+  .agent-health.is-warning { border-left: 4px solid var(--status-warn-fg); }
+  .agent-health.is-warning .agent-health-icon { background: var(--status-warn-bg); color: var(--status-warn-fg); }
+  .agent-health.is-error { border-left: 4px solid var(--status-bad-fg); }
+  .agent-health.is-error .agent-health-icon { background: var(--status-bad-bg); color: var(--status-bad-fg); }
+  .agent-health.is-info { border-left: 4px solid var(--status-info-fg); }
+  .agent-health.is-info .agent-health-icon { background: var(--status-info-bg); color: var(--status-info-fg); }
+  .agent-health-facts {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: var(--space-3);
+  }
+  .agent-health-fact {
+    background: var(--surface-alt); border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm); padding: var(--space-2) var(--space-3);
+  }
+  .agent-health-fact-label {
+    font-size: var(--text-xs); color: var(--muted);
+    font-weight: var(--font-weight-medium); text-transform: uppercase;
+    letter-spacing: .05em; margin-bottom: 2px;
+  }
+  .agent-health-fact-value { font-size: var(--text-sm); color: var(--text); word-break: break-word; }
+
+  /* Field group — the card-internal grouping primitive used to re-flow each
+   * settings card into labelled sections instead of a wall of inputs. */
+  .field-group { display: grid; gap: var(--space-3); }
+  .field-group + .field-group { margin-top: var(--space-5); padding-top: var(--space-4); border-top: 1px solid var(--border-light); }
+  .field-group-title { font-size: var(--text-sm); font-weight: var(--font-weight-bold); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  .field-group-help { font-size: var(--text-sm); color: var(--muted); line-height: var(--leading-normal); margin-top: -4px; }
+
+  /* Recommendation chips — a row of one-click presets shown beneath a
+   * free-form input to make the common values discoverable. Generic enough
+   * for the secure-cover colour, label-text presets, etc. */
+  .chip-row { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px var(--space-3); border-radius: var(--radius-pill);
+    border: 1px solid var(--border); background: var(--surface);
+    font-size: var(--text-sm); color: var(--text); cursor: pointer;
+    transition: background .15s, border-color .15s, box-shadow .15s;
+  }
+  .chip:hover, .chip:focus-visible { background: var(--brand-light); border-color: var(--brand-mid); }
+  .chip:active { transform: translateY(1px); }
+  .chip-swatch {
+    width: 14px; height: 14px; border-radius: 50%; flex-shrink: 0;
+    border: 1px solid rgba(0,0,0,.18); box-shadow: inset 0 0 0 1px rgba(255,255,255,.4);
+  }
+
+  /* Secure-cover colour picker — HEX field, native picker, and three RGB
+   * sliders sit side-by-side with a live preview tile. */
+  .color-picker { display: grid; gap: var(--space-3); }
+  .color-picker-row {
+    display: grid; grid-template-columns: 56px 1fr auto; gap: var(--space-3);
+    align-items: center;
+  }
+  .color-preview {
+    width: 56px; height: 56px; border-radius: var(--radius-sm);
+    border: 1px solid var(--border); box-shadow: inset 0 0 0 1px rgba(255,255,255,.4);
+    background: #fff;
+  }
+  input[type=color].color-picker-native {
+    width: 56px; height: 36px; padding: 0; border: 1px solid var(--border);
+    border-radius: var(--radius-sm); background: var(--surface); cursor: pointer;
+  }
+  .color-sliders { display: grid; gap: var(--space-2); }
+  .color-slider-row {
+    display: grid; grid-template-columns: 24px 1fr 56px; gap: var(--space-2);
+    align-items: center;
+  }
+  .color-slider-label { font-size: var(--text-xs); font-weight: var(--font-weight-bold); color: var(--muted); }
+  .color-slider-value {
+    text-align: right; font-family: ui-monospace, monospace;
+    font-size: var(--text-sm); color: var(--text);
+  }
+  input[type=range].color-slider {
+    width: 100%; height: 6px; -webkit-appearance: none; appearance: none;
+    background: linear-gradient(to right, var(--border), var(--brand-mid));
+    border-radius: var(--radius-pill); outline: none;
+  }
+  input[type=range].color-slider::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none; width: 16px; height: 16px;
+    border-radius: 50%; background: var(--brand); cursor: pointer;
+    border: 2px solid #fff; box-shadow: 0 1px 3px rgba(0,0,0,.2);
+  }
+  input[type=range].color-slider::-moz-range-thumb {
+    width: 16px; height: 16px; border-radius: 50%; background: var(--brand);
+    cursor: pointer; border: 2px solid #fff; box-shadow: 0 1px 3px rgba(0,0,0,.2);
+  }
+
+  /* Inline save toast — auto-dismisses after a few seconds and can be
+   * closed by hand. Builds on the existing .alert flash so server-side
+   * ?notice= redirects keep working unchanged. */
+  .alert {
+    position: relative; display: flex; align-items: center; gap: var(--space-2);
+    transition: opacity .4s ease, transform .4s ease;
+  }
+  .alert.is-dismissing { opacity: 0; transform: translateY(-4px); }
+  .alert-close {
+    margin-left: auto; background: transparent; border: 0; color: inherit;
+    font-size: var(--text-md); line-height: 1; cursor: pointer; padding: 4px 6px;
+    border-radius: var(--radius-sm); opacity: .7;
+  }
+  .alert-close:hover { opacity: 1; }
+
+  /* Dirty-aware save buttons — start visually disabled, become primary
+   * once the form is dirty. The disabled state is managed by JS via a
+   * data-dirty attribute on the form, with a CSS hook for the visual. */
+  form.js-dirty-aware:not([data-dirty='true']) button[type=submit][data-dirty-required] {
+    opacity: .55; pointer-events: none;
+  }
 `
 
 // ---------------------------------------------------------------------------
@@ -1711,16 +1854,18 @@ function renderBrandingCard(snapshot: ReturnType<AgentRuntime['snapshot']>) {
 
       <div class="subsection">
         <div class="subsection-title">Shop name &amp; support contact</div>
-        <form method="post" action="/settings/branding" class="stack js-pending-form">
+        <form method="post" action="/settings/branding" class="stack js-pending-form js-dirty-aware">
           ${hiddenUiToken(snapshot.uiToken)}
           <div class="grid-2">
             <label>
               <div class="label-text">Business name (shown in the header)</div>
               <input type="text" name="brandName" value="${htmlEscape(snapshot.brandName ?? '')}" placeholder="Your Print Shop" />
+              <div class="hint">Appears in the top bar and on receipts to customers.</div>
             </label>
             <label>
               <div class="label-text">Support email (shown on the Support page)</div>
               <input type="email" name="supportContactEmail" value="${htmlEscape(snapshot.supportContactEmail ?? '')}" placeholder="support@yourshop.com" />
+              <div class="hint">Customers see this when they need help with a print.</div>
             </label>
           </div>
           <details>
@@ -1738,7 +1883,7 @@ function renderBrandingCard(snapshot: ReturnType<AgentRuntime['snapshot']>) {
             </label>
           </details>
           <div class="btn-row">
-            <button class="btn btn-primary" type="submit" data-pending-text="Saving…">Save shop details</button>
+            <button class="btn btn-primary" type="submit" data-pending-text="Saving…" data-dirty-required>Save shop details</button>
           </div>
         </form>
       </div>
@@ -1842,6 +1987,225 @@ export function renderFirstRunScreen(
 // ---------------------------------------------------------------------------
 // Page shell
 // ---------------------------------------------------------------------------
+
+/**
+ * KAN-295: a one-glance "agent health" header. Replaces the wall-of-text
+ * status panel (three muted lines for heartbeat / error / last job) on the
+ * dashboard with a green / amber / red banner that summarises whether the
+ * agent is healthy, has a transient issue, or needs attention. The three
+ * facts that used to be paragraph lines are surfaced as inline fact tiles
+ * so a curious operator can still see them, just structured for skimming.
+ *
+ * Variant rules:
+ *  - error:   not paired, OR connection is fully disconnected.
+ *  - warning: a recent `lastError`, OR the connection is stale.
+ *  - good:    paired + heartbeating fresh + no `lastError`.
+ *  - info:    paired but no heartbeat yet (waiting for first cloud sync).
+ *
+ * Exported so the variant selection can be unit-tested without rendering
+ * the entire dashboard.
+ */
+export function selectAgentHealthVariant(input: {
+  connection: ConnectionStatus
+  lastError: string | null | undefined
+}): { variant: 'good' | 'warning' | 'error' | 'info'; title: string; detail: string } {
+  const { connection, lastError } = input
+  if (connection.state === 'unregistered') {
+    return {
+      variant: 'error',
+      title: 'Not paired yet',
+      detail: 'This machine has not been paired with PrintAnywhere. Customer jobs cannot reach it yet.',
+    }
+  }
+  if (connection.state === 'disconnected') {
+    return {
+      variant: 'error',
+      title: 'Agent is offline',
+      detail: connection.detail,
+    }
+  }
+  if (lastError) {
+    return {
+      variant: 'warning',
+      title: 'Agent reported an error',
+      detail: lastError,
+    }
+  }
+  if (connection.state === 'stale') {
+    return {
+      variant: 'warning',
+      title: 'Cloud connection is slow',
+      detail: connection.detail,
+    }
+  }
+  if (connection.ageSeconds == null) {
+    return {
+      variant: 'info',
+      title: 'Waiting for the first cloud sync',
+      detail: connection.detail,
+    }
+  }
+  return {
+    variant: 'good',
+    title: 'Agent is healthy',
+    detail: connection.detail,
+  }
+}
+
+const AGENT_HEALTH_ICONS: Record<'good' | 'warning' | 'error' | 'info', string> = {
+  good: '✔',
+  warning: '⚠',
+  error: '✕',
+  info: 'ℹ',
+}
+
+/**
+ * Render the agent health banner card. `lastJobLabel` is the optional
+ * fact-tile text describing the most recent job, e.g. "abc123 · Completed".
+ */
+export function renderAgentHealthBanner(opts: {
+  connection: ConnectionStatus
+  lastError: string | null | undefined
+  lastHeartbeatLabel: string
+  lastJobLabel: string
+}): string {
+  const verdict = selectAgentHealthVariant({
+    connection: opts.connection,
+    lastError: opts.lastError ?? null,
+  })
+  const role = verdict.variant === 'error' ? 'alert' : 'status'
+  const live = verdict.variant === 'error' ? 'assertive' : 'polite'
+  return `<section class="agent-health is-${verdict.variant}" role="${role}" aria-live="${live}" aria-label="Agent health">
+    <div class="agent-health-row">
+      <div class="agent-health-icon" aria-hidden="true">${AGENT_HEALTH_ICONS[verdict.variant]}</div>
+      <div class="agent-health-body">
+        <div class="agent-health-title">${htmlEscape(verdict.title)}</div>
+        <div class="agent-health-text">${htmlEscape(verdict.detail)}</div>
+      </div>
+    </div>
+    <div class="agent-health-facts">
+      <div class="agent-health-fact">
+        <div class="agent-health-fact-label">Last heartbeat</div>
+        <div class="agent-health-fact-value">${htmlEscape(opts.lastHeartbeatLabel)}</div>
+      </div>
+      <div class="agent-health-fact">
+        <div class="agent-health-fact-label">Last error</div>
+        <div class="agent-health-fact-value">${htmlEscape(opts.lastError ?? 'None')}</div>
+      </div>
+      <div class="agent-health-fact">
+        <div class="agent-health-fact-label">Last job</div>
+        <div class="agent-health-fact-value">${htmlEscape(opts.lastJobLabel)}</div>
+      </div>
+    </div>
+  </section>`
+}
+
+/**
+ * Render the secure-cover colour picker block (KAN-295). Combines:
+ *  - a HEX text input that doubles as the form field the backend reads
+ *    (`secureCoverSheetColorName` — backend still accepts an arbitrary
+ *    string, so we round-trip the legacy named colours unchanged);
+ *  - a live preview swatch;
+ *  - a native `<input type="color">` picker;
+ *  - three RGB sliders with live numeric readouts;
+ *  - a row of recommended one-click swatch chips.
+ *
+ * The dirty/sync logic is wired by SHARED_SCRIPTS using the element IDs
+ * declared here as a contract.
+ */
+function renderSecureCoverColorPicker(opts: {
+  initialValue: string
+  errClass: string
+  fieldErrorHtml: string
+}) {
+  const initialHex = resolvePreviewHex(opts.initialValue)
+  const rgb = parseHexColor(initialHex) ?? { r: 255, g: 255, b: 255 }
+  const chips = RECOMMENDED_SECURE_COVER_SWATCHES.map(
+    (swatch) => `
+      <button type="button" class="chip" data-secure-cover-swatch
+              data-swatch-value="${htmlEscape(swatch.value)}"
+              data-swatch-preview="${htmlEscape(swatch.preview)}"
+              aria-label="Set secure cover colour to ${htmlEscape(swatch.label)}">
+        <span class="chip-swatch" aria-hidden="true" style="background:${htmlEscape(swatch.preview)};"></span>
+        <span>${htmlEscape(swatch.label)}</span>
+      </button>`,
+  ).join('')
+  return `
+    <div class="color-picker" data-secure-cover-picker
+         data-initial-value="${htmlEscape(opts.initialValue)}"
+         data-initial-preview="${htmlEscape(initialHex)}">
+      <div class="color-picker-row">
+        <div id="secure-cover-preview" class="color-preview"
+             style="background:${htmlEscape(initialHex)};" aria-hidden="true"></div>
+        <label class="${opts.errClass}">
+          <div class="label-text">Secure cover color</div>
+          <input type="text" id="secure-cover-hex" name="secureCoverSheetColorName"
+                 value="${htmlEscape(opts.initialValue)}"
+                 autocomplete="off" spellcheck="false" inputmode="text"
+                 aria-describedby="secure-cover-help" />
+          ${opts.fieldErrorHtml}
+          <div class="hint" id="secure-cover-help">Type a colour name (WHITE, KRAFT, …) or a HEX value like #1F4E8C.</div>
+        </label>
+        <label>
+          <div class="label-text">Picker</div>
+          <input type="color" id="secure-cover-color-picker"
+                 class="color-picker-native" value="${htmlEscape(initialHex)}"
+                 aria-label="Open the native colour picker" />
+        </label>
+      </div>
+      <div class="color-sliders" role="group" aria-label="RGB channels">
+        <div class="color-slider-row">
+          <span class="color-slider-label" aria-hidden="true">R</span>
+          <input type="range" id="secure-cover-rgb-r" class="color-slider"
+                 min="0" max="255" step="1" value="${rgb.r}" aria-label="Red channel" />
+          <span class="color-slider-value" id="secure-cover-rgb-r-value">${rgb.r}</span>
+        </div>
+        <div class="color-slider-row">
+          <span class="color-slider-label" aria-hidden="true">G</span>
+          <input type="range" id="secure-cover-rgb-g" class="color-slider"
+                 min="0" max="255" step="1" value="${rgb.g}" aria-label="Green channel" />
+          <span class="color-slider-value" id="secure-cover-rgb-g-value">${rgb.g}</span>
+        </div>
+        <div class="color-slider-row">
+          <span class="color-slider-label" aria-hidden="true">B</span>
+          <input type="range" id="secure-cover-rgb-b" class="color-slider"
+                 min="0" max="255" step="1" value="${rgb.b}" aria-label="Blue channel" />
+          <span class="color-slider-value" id="secure-cover-rgb-b-value">${rgb.b}</span>
+        </div>
+      </div>
+      <div>
+        <div class="label-text" style="margin-bottom:4px;">Recommended</div>
+        <div class="chip-row">${chips}</div>
+      </div>
+    </div>
+  `
+}
+
+const SECURE_COVER_LABEL_SUGGESTIONS = [
+  'SECURE-DO-NOT-OPEN',
+  'CONFIDENTIAL',
+  'PRIVATE',
+  'FOR-CUSTOMER-ONLY',
+]
+
+/**
+ * Render a reusable "suggestion chips" row that writes a preset value into
+ * a sibling text input. Used for the secure-cover label (and any other
+ * free-form field with a small known set of common values).
+ */
+function renderSuggestionChips(opts: { targetId: string; suggestions: ReadonlyArray<string> }) {
+  return `<div class="chip-row" data-suggestion-row data-target-id="${htmlEscape(opts.targetId)}">
+    ${opts.suggestions
+      .map(
+        (value) =>
+          `<button type="button" class="chip" data-suggestion-value="${htmlEscape(value)}"
+                   aria-label="Use suggestion ${htmlEscape(value)}">
+             <span>${htmlEscape(value)}</span>
+           </button>`,
+      )
+      .join('')}
+  </div>`
+}
 
 function pageShell(
   opts: {
@@ -2108,6 +2472,217 @@ const SHARED_SCRIPTS = `<script>
       });
     })(pendingForms[pf]);
   }
+
+  // --- KAN-295: dirty-aware save buttons ---------------------------------
+  // A form marked .js-dirty-aware starts with data-dirty="false". Any
+  // change/input event from one of its named inputs flips it to "true",
+  // which lets the CSS rule above re-enable buttons that declare
+  // data-dirty-required. The original input values are snapshotted on
+  // first paint so a user can toggle a field back to the snapshot and the
+  // form returns to clean.
+  //
+  // For real accessibility (keyboard users can Tab + Enter), we also
+  // toggle the buttons' DOM "disabled" property — CSS pointer-events alone
+  // would not stop keyboard submission. We avoid clobbering the
+  // "js-pending-form" handler that disables a button on submit by leaving
+  // aria-busy buttons alone (they are mid-submit and should stay disabled).
+  var dirtyForms = document.querySelectorAll('form.js-dirty-aware');
+  for (var df = 0; df < dirtyForms.length; df++) {
+    (function (form) {
+      form.setAttribute('data-dirty', 'false');
+      var inputs = form.querySelectorAll('input, select, textarea');
+      var requiredButtons = form.querySelectorAll('button[data-dirty-required]');
+      var initial = [];
+      for (var ii = 0; ii < inputs.length; ii++) {
+        var el = inputs[ii];
+        if (el.type === 'hidden' || el.type === 'file') continue;
+        var key = el.name || el.id || ('field-' + ii);
+        var value;
+        if (el.type === 'checkbox' || el.type === 'radio') value = el.checked ? '1' : '0';
+        else value = el.value;
+        initial.push({ el: el, key: key, value: value });
+      }
+      function applyDisabled(dirty) {
+        for (var bi = 0; bi < requiredButtons.length; bi++) {
+          var b = requiredButtons[bi];
+          // Never re-enable a button that is mid-submit (the js-pending-form
+          // handler disabled it and is owning the lifecycle until reload).
+          if (b.getAttribute('aria-busy') === 'true') continue;
+          b.disabled = !dirty;
+        }
+      }
+      function recompute() {
+        var dirty = false;
+        for (var i = 0; i < initial.length; i++) {
+          var item = initial[i];
+          var current;
+          if (item.el.type === 'checkbox' || item.el.type === 'radio') current = item.el.checked ? '1' : '0';
+          else current = item.el.value;
+          if (current !== item.value) { dirty = true; break; }
+        }
+        form.setAttribute('data-dirty', dirty ? 'true' : 'false');
+        applyDisabled(dirty);
+      }
+      form.addEventListener('input', recompute);
+      form.addEventListener('change', recompute);
+      // Apply the initial clean -> disabled state on first paint.
+      applyDisabled(false);
+    })(dirtyForms[df]);
+  }
+
+  // --- KAN-295: auto-dismissing flash toast ------------------------------
+  // The redirect-with-?notice= pattern (and the inline ?error=) renders an
+  // .alert at the top of the page. Attach a close button + a 5-second
+  // auto-dismiss so the operator sees the success without it pinning the
+  // viewport forever. Errors are NOT auto-dismissed — they require an
+  // explicit click so the operator doesn't miss them.
+  var alerts = document.querySelectorAll('.alert');
+  for (var ai = 0; ai < alerts.length; ai++) {
+    (function (alert) {
+      if (alert.querySelector('.alert-close')) return;
+      var close = document.createElement('button');
+      close.type = 'button';
+      close.className = 'alert-close';
+      close.setAttribute('aria-label', 'Dismiss this message');
+      close.textContent = '\\u00d7';
+      close.addEventListener('click', function () {
+        alert.classList.add('is-dismissing');
+        setTimeout(function () {
+          if (alert.parentNode) alert.parentNode.removeChild(alert);
+        }, 400);
+      });
+      alert.appendChild(close);
+      if (alert.classList.contains('alert-success')) {
+        setTimeout(function () {
+          if (!alert.parentNode) return;
+          alert.classList.add('is-dismissing');
+          setTimeout(function () {
+            if (alert.parentNode) alert.parentNode.removeChild(alert);
+          }, 400);
+        }, 5000);
+      }
+    })(alerts[ai]);
+  }
+
+  // --- KAN-295: secure-cover colour picker -------------------------------
+  // The picker keeps four UI affordances in sync (hex text input, native
+  // colour picker, three RGB sliders, swatch chips). Pure helpers below
+  // are duplicated from src/ui/secureCoverColors.ts (which is the unit-
+  // tested source of truth); keep them in sync if the canonical helpers
+  // change.
+  function normalizeHex(raw) {
+    if (raw == null) return null;
+    var t = String(raw).trim().toLowerCase();
+    if (!t) return null;
+    var s = t.charAt(0) === '#' ? t.slice(1) : t;
+    if (/^[0-9a-f]{3}$/.test(s)) return '#' + s.charAt(0) + s.charAt(0) + s.charAt(1) + s.charAt(1) + s.charAt(2) + s.charAt(2);
+    if (/^[0-9a-f]{6}$/.test(s)) return '#' + s;
+    return null;
+  }
+  function parseHex(raw) {
+    var hex = normalizeHex(raw);
+    if (!hex) return null;
+    return { r: parseInt(hex.slice(1, 3), 16), g: parseInt(hex.slice(3, 5), 16), b: parseInt(hex.slice(5, 7), 16) };
+  }
+  function clampChan(n) {
+    var v = typeof n === 'number' ? n : parseInt(String(n || ''), 10);
+    if (!isFinite(v) || isNaN(v)) return 0;
+    if (v < 0) return 0;
+    if (v > 255) return 255;
+    return Math.round(v);
+  }
+  function rgbToHexStr(rgb) {
+    function pad(n) { var s = clampChan(n).toString(16); return s.length < 2 ? '0' + s : s; }
+    return '#' + pad(rgb.r) + pad(rgb.g) + pad(rgb.b);
+  }
+
+  var picker = document.querySelector('[data-secure-cover-picker]');
+  if (picker) {
+    var hexInput = document.getElementById('secure-cover-hex');
+    var nativePicker = document.getElementById('secure-cover-color-picker');
+    var preview = document.getElementById('secure-cover-preview');
+    var rEl = document.getElementById('secure-cover-rgb-r');
+    var gEl = document.getElementById('secure-cover-rgb-g');
+    var bEl = document.getElementById('secure-cover-rgb-b');
+    var rVal = document.getElementById('secure-cover-rgb-r-value');
+    var gVal = document.getElementById('secure-cover-rgb-g-value');
+    var bVal = document.getElementById('secure-cover-rgb-b-value');
+
+    function paint(hex, alsoWriteHexInput) {
+      if (!hex) return;
+      if (preview) preview.style.background = hex;
+      if (nativePicker) nativePicker.value = hex;
+      var rgb = parseHex(hex);
+      if (rgb) {
+        if (rEl) rEl.value = String(rgb.r);
+        if (gEl) gEl.value = String(rgb.g);
+        if (bEl) bEl.value = String(rgb.b);
+        if (rVal) rVal.textContent = String(rgb.r);
+        if (gVal) gVal.textContent = String(rgb.g);
+        if (bVal) bVal.textContent = String(rgb.b);
+      }
+      if (alsoWriteHexInput && hexInput) hexInput.value = hex;
+    }
+
+    if (hexInput) {
+      hexInput.addEventListener('input', function () {
+        var hex = normalizeHex(hexInput.value);
+        if (hex) paint(hex, false);
+      });
+    }
+    if (nativePicker) {
+      nativePicker.addEventListener('input', function () {
+        paint(nativePicker.value, true);
+        if (hexInput) hexInput.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+    }
+    function onSliderInput() {
+      var hex = rgbToHexStr({ r: rEl.value, g: gEl.value, b: bEl.value });
+      paint(hex, true);
+      if (hexInput) hexInput.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    if (rEl) rEl.addEventListener('input', onSliderInput);
+    if (gEl) gEl.addEventListener('input', onSliderInput);
+    if (bEl) bEl.addEventListener('input', onSliderInput);
+
+    var swatches = picker.querySelectorAll('[data-secure-cover-swatch]');
+    for (var si = 0; si < swatches.length; si++) {
+      (function (chip) {
+        chip.addEventListener('click', function () {
+          var value = chip.getAttribute('data-swatch-value') || '';
+          var previewHex = chip.getAttribute('data-swatch-preview') || normalizeHex(value);
+          if (hexInput) {
+            hexInput.value = value;
+            hexInput.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+          if (previewHex) paint(previewHex, false);
+        });
+      })(swatches[si]);
+    }
+  }
+
+  // --- KAN-295: generic suggestion chips ----------------------------------
+  // A row marked [data-suggestion-row] writes its chip's data-suggestion-value
+  // into the input identified by data-target-id, then fires a change event so
+  // dirty-tracking picks it up.
+  var suggestionRows = document.querySelectorAll('[data-suggestion-row]');
+  for (var sri = 0; sri < suggestionRows.length; sri++) {
+    (function (row) {
+      var targetId = row.getAttribute('data-target-id') || '';
+      var target = targetId ? document.getElementById(targetId) : null;
+      if (!target) return;
+      var chips = row.querySelectorAll('[data-suggestion-value]');
+      for (var ci2 = 0; ci2 < chips.length; ci2++) {
+        (function (chip) {
+          chip.addEventListener('click', function () {
+            target.value = chip.getAttribute('data-suggestion-value') || '';
+            target.dispatchEvent(new Event('change', { bubbles: true }));
+            target.focus();
+          });
+        })(chips[ci2]);
+      }
+    })(suggestionRows[sri]);
+  }
 })();
 </script>`
 
@@ -2299,7 +2874,7 @@ export function renderPlatformPrinterForm(
   const errClass = (name: string) => (sticky?.fieldErrors?.[name] ? ' has-error' : '')
 
   return `
-    <form method="post" action="/platform-printers/save" class="stack">
+    <form method="post" action="/platform-printers/save" class="stack js-pending-form js-dirty-aware">
       ${hiddenUiToken(uiToken)}
       ${printer ? `<input type="hidden" name="printerId" value="${htmlEscape(printer.printerId)}" />` : ''}
       <div class="card-title">${htmlEscape(title)}</div>
@@ -2381,28 +2956,43 @@ export function renderPlatformPrinterForm(
         </details>
         <details${stickyChecked(sticky, 'supportsSecureCoverSheets', printer?.supportsSecureCoverSheets ?? false) ? ' open' : ''}>
           <summary><span class="summary-row"><span>Secure cover packet</span></span></summary>
-          <div class="grid-3" style="margin-top:10px;">
-            <label class="choice span-3">
+          <p class="muted small" style="margin-top:8px;">
+            Optional. When enabled, customers can ask for a coloured cover sheet to hide
+            sensitive prints from view in the pickup tray.
+          </p>
+          <div class="field-group" style="margin-top:10px;">
+            <label class="choice">
               <input type="checkbox" name="supportsSecureCoverSheets" ${checked(stickyChecked(sticky, 'supportsSecureCoverSheets', printer?.supportsSecureCoverSheets ?? false))} />
               <span>Offer secure cover packets</span>
             </label>
-            ${stickyMoneyField({ name: 'secureCoverSheetPriceMinor', label: 'Secure cover surcharge', paiseValue: printer?.secureCoverSheetPriceMinor, sticky })}
-            <label class="${errClass('secureCoverSheetColorName').trim()}">
-              <div class="label-text">Secure cover color</div>
-              <input type="text" name="secureCoverSheetColorName" value="${htmlEscape(stickyValue(sticky, 'secureCoverSheetColorName', printer?.secureCoverSheetColorName ?? 'WHITE'))}" />
-              ${fieldError(sticky, 'secureCoverSheetColorName')}
-            </label>
-            <label class="span-3 ${errClass('secureCoverSheetLabel').trim()}">
+            <div class="grid-2">
+              ${stickyMoneyField({ name: 'secureCoverSheetPriceMinor', label: 'Secure cover surcharge', paiseValue: printer?.secureCoverSheetPriceMinor, sticky })}
+            </div>
+          </div>
+          <div class="field-group">
+            <div class="field-group-title">Cover colour</div>
+            <p class="field-group-help">Pick a colour by name, HEX value, RGB sliders, or one of the recommended swatches below.</p>
+            ${renderSecureCoverColorPicker({
+              initialValue: stickyValue(sticky, 'secureCoverSheetColorName', printer?.secureCoverSheetColorName ?? 'WHITE'),
+              errClass: errClass('secureCoverSheetColorName').trim(),
+              fieldErrorHtml: fieldError(sticky, 'secureCoverSheetColorName'),
+            })}
+          </div>
+          <div class="field-group">
+            <div class="field-group-title">Cover label</div>
+            <p class="field-group-help">Printed on the cover sheet so staff handle it carefully. Tap a suggestion or type your own.</p>
+            <label class="${errClass('secureCoverSheetLabel').trim()}">
               <div class="label-text">Secure cover label</div>
-              <input type="text" name="secureCoverSheetLabel" value="${htmlEscape(stickyValue(sticky, 'secureCoverSheetLabel', printer?.secureCoverSheetLabel ?? 'SECURE-DO-NOT-OPEN'))}" />
+              <input type="text" id="secure-cover-label" name="secureCoverSheetLabel" value="${htmlEscape(stickyValue(sticky, 'secureCoverSheetLabel', printer?.secureCoverSheetLabel ?? 'SECURE-DO-NOT-OPEN'))}" />
               ${fieldError(sticky, 'secureCoverSheetLabel')}
             </label>
+            ${renderSuggestionChips({ targetId: 'secure-cover-label', suggestions: SECURE_COVER_LABEL_SUGGESTIONS })}
           </div>
         </details>
       </div>
       ${renderAdvancedPrinterSections(printer, sticky)}
       <div class="btn-row">
-        <button class="btn btn-primary" type="submit">${htmlEscape(submitLabel)}</button>
+        <button class="btn btn-primary" type="submit" data-pending-text="Saving…" data-dirty-required>${htmlEscape(submitLabel)}</button>
       </div>
     </form>
   `
@@ -3068,8 +3658,23 @@ export async function startUiServer(runtime: AgentRuntime) {
           </div>`
         : ''}
 
+      ${renderAgentHealthBanner({
+        connection: computeConnectionState({
+          registered: !!snapshot.registration?.agentId,
+          lastHeartbeatAt: snapshot.lastHeartbeatAt ?? null,
+        }),
+        lastError: snapshot.lastError ?? null,
+        lastHeartbeatLabel: formatTimestamp(snapshot.lastHeartbeatAt),
+        lastJobLabel: snapshot.lastJob
+          ? `${snapshot.lastJob.jobId} · ${humanizeEnum(snapshot.lastJob.status)}`
+          : 'None',
+      })}
+
       <div class="card">
-        <div class="card-title">Health &amp; status</div>
+        <div class="card-title">Today's activity</div>
+        <p class="muted small" style="margin-bottom:var(--space-3);">
+          A quick count of jobs that have come through this machine today.
+        </p>
         <div class="stats-grid">
           <div class="stat-card">
             <div class="stat-label">Active jobs</div>
@@ -3084,16 +3689,11 @@ export async function startUiServer(runtime: AgentRuntime) {
             <div class="stat-value">${snapshot.stats?.failedJobsToday ?? 0}</div>
           </div>
         </div>
-        <div class="subsection" style="margin-top:14px; padding-top:12px;">
-          <div class="muted small">Last heartbeat: ${htmlEscape(formatTimestamp(snapshot.lastHeartbeatAt))}</div>
-          <div class="muted small" style="margin-top:4px;">Last error: ${htmlEscape(snapshot.lastError ?? 'None')}</div>
-          <div class="muted small" style="margin-top:4px;">Last job: ${htmlEscape(snapshot.lastJob ? `${snapshot.lastJob.jobId} · ${humanizeEnum(snapshot.lastJob.status)}` : 'None')}</div>
-        </div>
       </div>
 
       <div class="card">
         <div class="card-title">Backend configuration</div>
-        <form method="post" action="/configure" class="stack" id="configure-form">
+        <form method="post" action="/configure" class="stack js-pending-form js-dirty-aware" id="configure-form">
           ${hiddenUiToken(snapshot.uiToken)}
           <input type="hidden" name="latitude" id="configure-location-latitude" />
           <input type="hidden" name="longitude" id="configure-location-longitude" />
@@ -3102,36 +3702,48 @@ export async function startUiServer(runtime: AgentRuntime) {
           <!-- Save never silently prompts for geolocation. The owner shares
                location only via the explicit button below (KAN-38, mirrors
                the KAN-37 first-run fix). -->
-          <label>
-            <div class="label-text">PrintAnywhere server URL</div>
-            <input type="url" name="serverUrl" value="${htmlEscape(configuredServerUrl)}" placeholder="${htmlEscape(defaultPrintAnywhereBackendUrl())}" required />
-            <div class="hint">Production default is prefilled. Change only for a local test backend or support-directed override.</div>
-          </label>
-          <div class="grid-2">
+          <div class="field-group">
+            <div class="field-group-title">Cloud connection</div>
             <label>
-              <div class="label-text">Display name</div>
-              <input type="text" name="displayName" value="${htmlEscape(snapshot.displayName ?? '')}" placeholder="Counter PC - Front Desk" />
-            </label>
-            <label>
-              <div class="label-text">Business address for admin review</div>
-              <input type="text" name="reportedBusinessAddress" value="${htmlEscape(snapshot.reportedBusinessAddress ?? profile?.reportedBusinessAddress ?? '')}" placeholder="Shop number, street, city, state" />
+              <div class="label-text">PrintAnywhere server URL</div>
+              <input type="url" name="serverUrl" value="${htmlEscape(configuredServerUrl)}" placeholder="${htmlEscape(defaultPrintAnywhereBackendUrl())}" required />
+              <div class="hint">Production default is prefilled. Change only for a local test backend or support-directed override.</div>
             </label>
           </div>
-          <div class="loc-explainer">
-            <div class="step-title" style="font-size:var(--text-base);">Update this shop's location (optional)</div>
-            <p class="muted small" style="margin-top:4px; line-height:1.6;">
-              Saving these settings will <strong>not</strong> ask for your location. If your shop
-              has moved or its location was never set, click below — your browser will then ask
-              for permission, and the new location is sent on the next sync.
-            </p>
-            <div class="btn-row" style="margin-top:10px;">
-              <button class="btn btn-secondary" type="button" id="paired-location-button">Share device location</button>
-              <span class="muted small" id="paired-location-status"></span>
+          <div class="field-group">
+            <div class="field-group-title">Shop identity</div>
+            <p class="field-group-help">How this machine appears to your platform admin in the PrintAnywhere console.</p>
+            <div class="grid-2">
+              <label>
+                <div class="label-text">Display name</div>
+                <input type="text" name="displayName" value="${htmlEscape(snapshot.displayName ?? '')}" placeholder="Counter PC - Front Desk" />
+                <div class="hint">A short label so the admin can tell your machines apart.</div>
+              </label>
+              <label>
+                <div class="label-text">Business address for admin review</div>
+                <input type="text" name="reportedBusinessAddress" value="${htmlEscape(snapshot.reportedBusinessAddress ?? profile?.reportedBusinessAddress ?? '')}" placeholder="Shop number, street, city, state" />
+                <div class="hint">Used during onboarding to verify the shop location.</div>
+              </label>
+            </div>
+          </div>
+          <div class="field-group">
+            <div class="field-group-title">Shop location</div>
+            <div class="loc-explainer">
+              <div class="step-title" style="font-size:var(--text-base);">Update this shop's location (optional)</div>
+              <p class="muted small" style="margin-top:4px; line-height:1.6;">
+                Saving these settings will <strong>not</strong> ask for your location. If your shop
+                has moved or its location was never set, click below — your browser will then ask
+                for permission, and the new location is sent on the next sync.
+              </p>
+              <div class="btn-row" style="margin-top:10px;">
+                <button class="btn btn-secondary" type="button" id="paired-location-button">Share device location</button>
+                <span class="muted small" id="paired-location-status"></span>
+              </div>
             </div>
           </div>
           ${isRegistered ? `<div class="hint">This machine is already registered. Saving updates local settings and sends the latest address/location on the next heartbeat; it does not create another machine.</div>` : ''}
           <div class="btn-row">
-            <button class="btn btn-primary" type="submit">${isRegistered ? 'Save settings' : 'Save and register'}</button>
+            <button class="btn btn-primary" type="submit" data-pending-text="Saving…" data-dirty-required>${isRegistered ? 'Save settings' : 'Save and register'}</button>
           </div>
         </form>
       </div>
