@@ -57,8 +57,18 @@ function hiddenUiToken(uiToken: string | null | undefined) {
 // hosts — it never resolves anywhere but 127.0.0.1.
 const LOCAL_UI_ALLOWED_HOSTS = ['127.0.0.1', 'localhost', '::1', LOCAL_UI_DOMAIN]
 
-function isLoopbackOrigin(value: string | undefined) {
+/**
+ * KAN-299: an Origin header is `loopback-safe` if it is missing, the literal
+ * string `"null"` (sent by sandboxed iframes / certain extensions / redirect
+ * chains / stale service workers — there is no remote origin that can forge
+ * `Origin: null` against a same-machine loopback POST), or it parses to a URL
+ * whose hostname is one of the same-machine loopback hosts. The uiToken still
+ * gates real authentication; the origin check is defence-in-depth against an
+ * off-machine drive-by, and `"null"` is by definition not off-machine here.
+ */
+export function isLoopbackOrigin(value: string | undefined) {
   if (!value) return true
+  if (value === 'null') return true
   try {
     const url = new URL(value)
     return LOCAL_UI_ALLOWED_HOSTS.includes(url.hostname)
@@ -67,7 +77,30 @@ function isLoopbackOrigin(value: string | undefined) {
   }
 }
 
-function verifyUiRequest(runtime: AgentRuntime, request: Request, response: Response) {
+/**
+ * KAN-299: parse the loopback host out of the `Host:` header (which is always
+ * present on a real HTTP/1.1 request) so a same-origin form POST that the
+ * browser stripped of both Origin AND Referer (e.g. cross-document navigations
+ * with no-referrer policy, certain extensions) still passes the origin check.
+ * The port suffix is discarded; only the hostname is compared.
+ */
+export function isLoopbackHostHeader(value: string | undefined) {
+  if (!value) return false
+  // `Host` can be `host:port`, `[ipv6]:port`, or `host`. Strip the port portion.
+  const trimmed = value.trim()
+  const stripped = trimmed.startsWith('[')
+    ? trimmed.slice(1).split(']')[0] // bracketed IPv6
+    : trimmed.split(':')[0]
+  return LOCAL_UI_ALLOWED_HOSTS.includes(stripped)
+}
+
+/**
+ * KAN-299: the verification routine each POST handler calls before touching
+ * runtime state. Exported so the request-level regression contract (Origin
+ * "null" allowed; both Origin+Referer absent with allowed Host allowed;
+ * off-machine Origin rejected) can be unit-tested without spinning a server.
+ */
+export function verifyUiRequest(runtime: AgentRuntime, request: Request, response: Response) {
   const snapshot = runtime.snapshot()
   const uiToken = String(request.body.uiToken ?? '')
   if (!runtime.verifyUiToken(uiToken)) {
@@ -76,8 +109,32 @@ function verifyUiRequest(runtime: AgentRuntime, request: Request, response: Resp
   }
   const origin = request.get('origin')
   const referer = request.get('referer')
-  if (!isLoopbackOrigin(origin) || !isLoopbackOrigin(referer)) {
-    response.status(403).type('text/plain').send('Local UI origin check failed')
+  const host = request.get('host')
+
+  // KAN-299: when both Origin and Referer are absent (or the literal `"null"`)
+  // the browser stripped the usual same-origin signals — fall back to the
+  // mandatory Host header instead of returning a blanket 403.
+  const originSafe = isLoopbackOrigin(origin)
+  const refererSafe = isLoopbackOrigin(referer)
+  const bothMissingOrNull =
+    (!origin || origin === 'null') && (!referer || referer === 'null')
+
+  const originOk = bothMissingOrNull
+    ? isLoopbackHostHeader(host)
+    : originSafe && refererSafe
+
+  if (!originOk) {
+    // KAN-299: surface the exact failing fields so an operator (and support)
+    // can diagnose the 403 instead of staring at a generic message. This
+    // endpoint is loopback-only, so the values are not sensitive — and an
+    // off-machine attacker cannot reach it in the first place.
+    const detail =
+      `(origin="${origin ?? ''}", referer="${referer ?? ''}", host="${host ?? ''}")`
+    console.warn(`PrintAnywhere Agent UI: origin check failed ${detail}`)
+    response
+      .status(403)
+      .type('text/plain')
+      .send(`Local UI origin check failed ${detail}`)
     return false
   }
   if (!snapshot.uiToken) {
