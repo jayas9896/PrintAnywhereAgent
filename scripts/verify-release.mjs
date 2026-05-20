@@ -23,6 +23,9 @@ const requiredPaths = [
   'dist/index.js',
   'dist/install/provisionLocalUi.js',
   'dist/ui/localHttps.js',
+  // KAN-294: detection + repair modules backing the loud-fallback banner.
+  'dist/ui/localHttpsHealth.js',
+  'dist/ui/localHttpsRepair.js',
   'dist/ui/launcherConfig.js',
   'docs/windows-setup.md',
   'docs/code-signing.md',
@@ -106,6 +109,9 @@ const textChecks = [
       // KAN-165: install-release must wire in the local-HTTPS setup.
       'Install-LocalHttpsUi',
       'lib\\local-https-setup.ps1',
+      // KAN-294: post-install smoke check + elevation gate.
+      'Test-IsElevated',
+      'Local HTTPS UI smoke check',
     ],
     mustNotInclude: ['$icaclsArgs += "/T"'],
   },

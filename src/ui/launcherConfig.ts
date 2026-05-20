@@ -14,6 +14,12 @@
  *    binds. It records the *actual* port and scheme the server is listening on,
  *    so the launcher script opens the correct URL even when the configured port
  *    was occupied and the agent fell back to another free port.
+ *
+ * KAN-294: across a *major* agent version bump (e.g. `0.x.y → 1.0.0`) the
+ * launcher config is reset to defaults so a stale `uiHost: "localhost"` chosen
+ * by support for an old install no longer silently downgrades the next major
+ * release. A minor/patch bump leaves the operator's choice alone — see
+ * `resetLauncherConfigIfMajorUpgrade`.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -94,17 +100,119 @@ export function readLauncherConfig(dataDir: string): LauncherConfig {
 /**
  * Write the launcher config file if it does not already exist. Idempotent — an
  * existing file (possibly hand-edited by support) is never overwritten.
+ *
+ * KAN-294: also stamps `installedAgentVersion` on the freshly-written config
+ * so a later major-bump reset can detect "this config was written under an
+ * earlier major version". Optional argument so existing callers/tests stay
+ * backwards-compatible — when omitted the version stamp is left blank.
  */
-export function ensureLauncherConfig(dataDir: string): void {
+export function ensureLauncherConfig(dataDir: string, installedAgentVersion?: string): void {
   const file = launcherConfigPath(dataDir)
   if (existsSync(file)) return
   mkdirSync(dataDir, { recursive: true })
-  const body = {
+  const body: Record<string, unknown> = {
     _comment: LAUNCHER_CONFIG_HEADER,
     uiHost: DEFAULT_LAUNCHER_CONFIG.uiHost,
     port: DEFAULT_LAUNCHER_CONFIG.port,
   }
+  if (installedAgentVersion) {
+    body.installedAgentVersion = installedAgentVersion
+  }
   writeFileSync(file, `${JSON.stringify(body, null, 2)}\n`, { encoding: 'utf8', mode: 0o644 })
+}
+
+/**
+ * KAN-294: parse the leading `major` digit out of a SemVer-ish version. We do
+ * a deliberately permissive parse — `0.1.29-beta+sha.deadbeef` is "major 0",
+ * and a missing/garbled value is reported as `null` so a caller can treat it
+ * as "unknown" rather than guessing.
+ */
+export function parseMajorVersion(value: string | null | undefined): number | null {
+  if (!value) return null
+  const match = /^\s*(\d+)/.exec(value)
+  if (!match) return null
+  const major = Number(match[1])
+  return Number.isFinite(major) ? major : null
+}
+
+/**
+ * KAN-294: read the `installedAgentVersion` field out of the launcher config
+ * file (if present). Returns `null` for a missing/malformed file — every
+ * caller should treat `null` as "this config has no version stamp".
+ */
+export function readLauncherConfigVersion(dataDir: string): string | null {
+  const file = launcherConfigPath(dataDir)
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+    const stamp = parsed.installedAgentVersion
+    return typeof stamp === 'string' && stamp.length > 0 ? stamp : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * KAN-294: across a *major* agent version bump (e.g. `0.x.y -> 1.0.0`), reset
+ * `ui-launcher.json` to its documented default and stamp the new version.
+ * A minor/patch bump (e.g. `0.1.29 -> 0.1.30`) is a no-op — the operator's
+ * choice (or a support-set `uiHost: "localhost"`) is preserved.
+ *
+ * The version stamp is always updated, so a freshly-installed bundle that
+ * already matches the major version still records the *exact* current
+ * version for future comparisons. Returns `true` if a reset was performed.
+ */
+export function resetLauncherConfigIfMajorUpgrade(
+  dataDir: string,
+  installedAgentVersion: string,
+): boolean {
+  const file = launcherConfigPath(dataDir)
+  if (!existsSync(file)) return false
+
+  const newMajor = parseMajorVersion(installedAgentVersion)
+  // A garbled current version is treated as "do nothing" — better than
+  // accidentally clobbering a working config because we cannot read our own
+  // package.json. The next install with a parseable version will catch up.
+  if (newMajor === null) return false
+
+  const oldMajor = parseMajorVersion(readLauncherConfigVersion(dataDir))
+  // No stamp → assume the file is from a pre-stamp era; refresh the stamp
+  // but leave uiHost / port alone (it predates this feature, the operator's
+  // choice is the source of truth).
+  if (oldMajor === null) {
+    const existing = readLauncherConfig(dataDir)
+    const body = {
+      _comment: LAUNCHER_CONFIG_HEADER,
+      uiHost: existing.uiHost,
+      port: existing.port,
+      installedAgentVersion,
+    }
+    writeFileSync(file, `${JSON.stringify(body, null, 2)}\n`, { encoding: 'utf8', mode: 0o644 })
+    return false
+  }
+
+  if (oldMajor === newMajor) {
+    // Same major → refresh the recorded version (so support can see what is
+    // installed) but otherwise leave the config alone.
+    const existing = readLauncherConfig(dataDir)
+    const body = {
+      _comment: LAUNCHER_CONFIG_HEADER,
+      uiHost: existing.uiHost,
+      port: existing.port,
+      installedAgentVersion,
+    }
+    writeFileSync(file, `${JSON.stringify(body, null, 2)}\n`, { encoding: 'utf8', mode: 0o644 })
+    return false
+  }
+
+  // Different major → reset.
+  const reset = {
+    _comment: LAUNCHER_CONFIG_HEADER,
+    uiHost: DEFAULT_LAUNCHER_CONFIG.uiHost,
+    port: DEFAULT_LAUNCHER_CONFIG.port,
+    installedAgentVersion,
+  }
+  writeFileSync(file, `${JSON.stringify(reset, null, 2)}\n`, { encoding: 'utf8', mode: 0o644 })
+  return true
 }
 
 export interface UiRuntimeInfo {

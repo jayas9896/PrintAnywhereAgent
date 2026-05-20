@@ -25,7 +25,14 @@ import type { AgentCouponUpsertPayload } from '../cloud/api.js'
 import { AGENT_VERSION, defaultPrintAnywhereBackendUrl } from '../config/defaults.js'
 import type { AgentRuntime, PlatformPrinterUpsertInput } from '../runtime/agentRuntime.js'
 import { LOCAL_UI_DOMAIN, ensureLocalCert } from './localHttps.js'
-import { DEFAULT_UI_PORT, readLauncherConfig, writeUiRuntimeInfo } from './launcherConfig.js'
+import {
+  DEFAULT_UI_PORT,
+  readLauncherConfig,
+  resetLauncherConfigIfMajorUpgrade,
+  writeUiRuntimeInfo,
+} from './launcherConfig.js'
+import { evaluateLocalUiDomainHealth } from './localHttpsHealth.js'
+import { runLocalHttpsRepair } from './localHttpsRepair.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -57,8 +64,18 @@ function hiddenUiToken(uiToken: string | null | undefined) {
 // hosts — it never resolves anywhere but 127.0.0.1.
 const LOCAL_UI_ALLOWED_HOSTS = ['127.0.0.1', 'localhost', '::1', LOCAL_UI_DOMAIN]
 
-function isLoopbackOrigin(value: string | undefined) {
+/**
+ * KAN-299: an Origin header is `loopback-safe` if it is missing, the literal
+ * string `"null"` (sent by sandboxed iframes / certain extensions / redirect
+ * chains / stale service workers — there is no remote origin that can forge
+ * `Origin: null` against a same-machine loopback POST), or it parses to a URL
+ * whose hostname is one of the same-machine loopback hosts. The uiToken still
+ * gates real authentication; the origin check is defence-in-depth against an
+ * off-machine drive-by, and `"null"` is by definition not off-machine here.
+ */
+export function isLoopbackOrigin(value: string | undefined) {
   if (!value) return true
+  if (value === 'null') return true
   try {
     const url = new URL(value)
     return LOCAL_UI_ALLOWED_HOSTS.includes(url.hostname)
@@ -67,7 +84,30 @@ function isLoopbackOrigin(value: string | undefined) {
   }
 }
 
-function verifyUiRequest(runtime: AgentRuntime, request: Request, response: Response) {
+/**
+ * KAN-299: parse the loopback host out of the `Host:` header (which is always
+ * present on a real HTTP/1.1 request) so a same-origin form POST that the
+ * browser stripped of both Origin AND Referer (e.g. cross-document navigations
+ * with no-referrer policy, certain extensions) still passes the origin check.
+ * The port suffix is discarded; only the hostname is compared.
+ */
+export function isLoopbackHostHeader(value: string | undefined) {
+  if (!value) return false
+  // `Host` can be `host:port`, `[ipv6]:port`, or `host`. Strip the port portion.
+  const trimmed = value.trim()
+  const stripped = trimmed.startsWith('[')
+    ? trimmed.slice(1).split(']')[0] // bracketed IPv6
+    : trimmed.split(':')[0]
+  return LOCAL_UI_ALLOWED_HOSTS.includes(stripped)
+}
+
+/**
+ * KAN-299: the verification routine each POST handler calls before touching
+ * runtime state. Exported so the request-level regression contract (Origin
+ * "null" allowed; both Origin+Referer absent with allowed Host allowed;
+ * off-machine Origin rejected) can be unit-tested without spinning a server.
+ */
+export function verifyUiRequest(runtime: AgentRuntime, request: Request, response: Response) {
   const snapshot = runtime.snapshot()
   const uiToken = String(request.body.uiToken ?? '')
   if (!runtime.verifyUiToken(uiToken)) {
@@ -76,8 +116,32 @@ function verifyUiRequest(runtime: AgentRuntime, request: Request, response: Resp
   }
   const origin = request.get('origin')
   const referer = request.get('referer')
-  if (!isLoopbackOrigin(origin) || !isLoopbackOrigin(referer)) {
-    response.status(403).type('text/plain').send('Local UI origin check failed')
+  const host = request.get('host')
+
+  // KAN-299: when both Origin and Referer are absent (or the literal `"null"`)
+  // the browser stripped the usual same-origin signals — fall back to the
+  // mandatory Host header instead of returning a blanket 403.
+  const originSafe = isLoopbackOrigin(origin)
+  const refererSafe = isLoopbackOrigin(referer)
+  const bothMissingOrNull =
+    (!origin || origin === 'null') && (!referer || referer === 'null')
+
+  const originOk = bothMissingOrNull
+    ? isLoopbackHostHeader(host)
+    : originSafe && refererSafe
+
+  if (!originOk) {
+    // KAN-299: surface the exact failing fields so an operator (and support)
+    // can diagnose the 403 instead of staring at a generic message. This
+    // endpoint is loopback-only, so the values are not sensitive — and an
+    // off-machine attacker cannot reach it in the first place.
+    const detail =
+      `(origin="${origin ?? ''}", referer="${referer ?? ''}", host="${host ?? ''}")`
+    console.warn(`PrintAnywhere Agent UI: origin check failed ${detail}`)
+    response
+      .status(403)
+      .type('text/plain')
+      .send(`Local UI origin check failed ${detail}`)
     return false
   }
   if (!snapshot.uiToken) {
@@ -2855,6 +2919,19 @@ async function storeBrandingLogo(
 export async function startUiServer(runtime: AgentRuntime) {
   const app = express()
 
+  // KAN-294: launcher config is needed both up here (for the dashboard
+  // health banner) and below at server-bind time. Read it once and reuse.
+  // The major-upgrade reset (KAN-294) runs before every read so a stale
+  // `uiHost: "localhost"` from a prior major install does not silently
+  // downgrade this release.
+  const startupDataDir = runtime.dataDir
+  try {
+    resetLauncherConfigIfMajorUpgrade(startupDataDir, AGENT_VERSION)
+  } catch (error) {
+    console.warn('PrintAnywhere Agent UI: major-upgrade reset check failed:', error)
+  }
+  const startupLauncherConfig = readLauncherConfig(startupDataDir)
+
   app.use((_request, response, next) => {
     response.setHeader('X-Frame-Options', 'DENY')
     response.setHeader('X-Content-Type-Options', 'nosniff')
@@ -2955,6 +3032,16 @@ export async function startUiServer(runtime: AgentRuntime) {
     // screen is already a focused experience and carries its own messaging.
     const lifecycleBanner = selectLifecycleBanner(profile)
 
+    // KAN-294: loud-fallback banner — when the launcher is configured to use
+    // the `local.printanywhere.dhruvantasystems.com` domain but the
+    // underlying support (hosts entry, per-host cert) is missing, surface a
+    // prominent banner with a "Repair local URL setup" button so the
+    // operator never has to wonder why the URL is wrong.
+    const domainHealth = evaluateLocalUiDomainHealth({
+      dataDir: startupDataDir,
+      uiHost: startupLauncherConfig.uiHost,
+    })
+
     const content = `
       <div>
         <div class="page-eyebrow">Agent console</div>
@@ -2966,6 +3053,19 @@ export async function startUiServer(runtime: AgentRuntime) {
             title: lifecycleBanner.title,
             body: lifecycleBanner.body,
           })}</div>`
+        : ''}
+      ${!domainHealth.ok
+        ? `<div id="local-https-banner" class="state-banner state-banner-warning" role="status" aria-live="polite">
+            <span class="state-banner-icon" aria-hidden="true">⚠</span>
+            <span class="state-banner-body">
+              <span class="state-banner-title">Local domain not configured</span>
+              <span class="state-banner-text">${htmlEscape(domainHealth.reason)}</span>
+              <form method="post" action="/actions/repair-local-https" class="js-pending-form" style="margin-top:8px;">
+                ${hiddenUiToken(snapshot.uiToken)}
+                <button type="submit" class="btn btn-primary">Repair local URL setup</button>
+              </form>
+            </span>
+          </div>`
         : ''}
 
       <div class="card">
@@ -3886,6 +3986,32 @@ export async function startUiServer(runtime: AgentRuntime) {
     }
   })
 
+  // KAN-294: "Repair local URL setup" action — wired to the loud-fallback
+  // banner on the dashboard. Verifies the hosts-file entry, reinstalls the
+  // per-host self-signed cert, and (per the deviation noted in
+  // localHttpsRepair.ts) asks the operator to restart the agent to finish
+  // picking up the new certificate. Surfaces the elevation requirement
+  // clearly so the operator does not silently fail again.
+  app.post('/actions/repair-local-https', async (request, response) => {
+    if (!verifyUiRequest(runtime, request, response)) return
+    try {
+      const result = await runLocalHttpsRepair({ dataDir: startupDataDir })
+      if (!result.ok) {
+        console.warn(
+          'PrintAnywhere Agent UI: local-https repair failed:',
+          ...result.details,
+        )
+      }
+      redirectWithStatus(response, result.ok ? 'notice' : 'error', result.message)
+    } catch (error) {
+      redirectWithStatus(
+        response,
+        'error',
+        error instanceof Error ? error.message : 'Could not run the local URL repair.',
+      )
+    }
+  })
+
   app.post('/actions/refresh', async (request, response) => {
     if (!verifyUiRequest(runtime, request, response)) return
     try {
@@ -4056,8 +4182,8 @@ export async function startUiServer(runtime: AgentRuntime) {
   // `https://local.printanywhere.dhruvantasystems.com:<port>`. The same socket
   // also answers `127.0.0.1` / `localhost` (the domain is a hosts-file alias
   // for 127.0.0.1) so the loopback fallback stays fully functional.
-  const dataDir = runtime.dataDir
-  const launcherConfig = readLauncherConfig(dataDir)
+  const dataDir = startupDataDir
+  const launcherConfig = startupLauncherConfig
   // Precedence: explicit env override > launcher config file > built-in default.
   const configuredPort = Number(
     process.env.PRINTANYWHERE_AGENT_PORT ?? launcherConfig.port ?? DEFAULT_UI_PORT,
