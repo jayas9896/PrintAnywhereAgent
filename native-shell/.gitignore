@@ -2,3 +2,8 @@ bin/
 obj/
 *.user
 *.suo
+# Phase 2c — payload/ is the MSI build-staging directory. Contents
+# are produced by scripts/build-native-msi.mjs (or the CI workflow)
+# from the release bundle; never source.
+PrintAnywhereAgent.Installer/payload/*
+!PrintAnywhereAgent.Installer/payload/.gitkeep

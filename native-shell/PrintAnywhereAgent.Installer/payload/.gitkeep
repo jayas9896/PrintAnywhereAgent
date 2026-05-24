@@ -1,0 +1,3 @@
+# Payload staging directory for the WiX MSI build. Contents are
+# produced at build time by scripts/build-native-msi.mjs (or the
+# native-shell CI workflow) — never committed.
