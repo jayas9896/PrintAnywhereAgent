@@ -2326,6 +2326,7 @@ function pageShell(
       label: 'Operate',
       items: [
         { href: '/', label: 'Dashboard', id: 'dashboard' },
+        { href: '/printers', label: 'Printers', id: 'printers' },
         { href: '/orders', label: 'Orders', id: 'orders' },
         { href: '/coupons', label: 'Coupons', id: 'coupons' },
       ],
@@ -3372,6 +3373,120 @@ function renderCouponForm(
 }
 
 /**
+/**
+ * KAN-415 Agent Phase 1 (post-MVP) — extracted printers cards shared
+ * by GET / (Dashboard) and the dedicated GET /printers page. Both
+ * cards used to live inline in the Dashboard template; pulling them
+ * into a helper lets the dedicated page reuse the exact same markup
+ * + lets the Dashboard collapse them into a short summary + link.
+ */
+function renderPrintersPageCards(
+  snapshot: ReturnType<AgentRuntime['snapshot']>,
+): string {
+  const profile = snapshot.profile
+  const platformPrinters = snapshot.platformPrinters ?? []
+  const sharedPrinterNames = snapshot.printers
+    .filter((p) => p.shared)
+    .map((p) => p.localPrinterName)
+  return `
+    <div class="card">
+      <div class="card-title">Published platform printers</div>
+      <p class="muted small">These are the customer-facing printers published from this machine.</p>
+      ${profile?.selfServiceEnabled
+        ? renderPlatformPrinterForm(snapshot.uiToken, sharedPrinterNames)
+        : `<div class="alert alert-info" style="margin-top:12px;">Admin approval is required before this machine can publish or edit platform printers.</div>`}
+      ${platformPrinters.length === 0
+        ? `<div style="margin-top:12px;">${emptyState({
+            title: 'No printers published to customers yet',
+            text: profile?.selfServiceEnabled
+              ? 'Use the form above to publish your first printer. Once published, customers can find and print to it.'
+              : 'Once your machine is approved, publish a printer here so customers can find and print to it.',
+            action: `<form method="post" action="/actions/refresh" class="js-pending-form">
+              ${hiddenUiToken(snapshot.uiToken)}
+              <button class="btn btn-secondary" type="submit" data-pending-text="Refreshing…">Refresh</button>
+            </form>`,
+          })}</div>`
+        : ''}
+      ${platformPrinters.length > 0
+        ? `<div style="margin-top:16px;">
+            ${platformPrinters
+              .map(
+                (printer) => `
+                  <details>
+                    <summary>
+                      <span class="summary-row">
+                        <span>${htmlEscape(printer.name)} · <span class="muted">${htmlEscape(printer.agentPrinterName)}</span></span>
+                        <span class="${printer.enabled ? 'badge badge-good' : 'badge'}">${printer.enabled ? 'Enabled' : 'Disabled'}</span>
+                      </span>
+                    </summary>
+                    <div class="muted small" style="margin-bottom:12px;">
+                      Status: ${htmlEscape(humanizeEnum(printer.status))} ·
+                      Base ${htmlEscape(formatMinor(printer.baseJobPriceMinor))} ·
+                      Mono ${htmlEscape(formatMinor(printer.monochromePagePriceMinor))} ·
+                      Color ${htmlEscape(formatMinor(printer.colorPagePriceMinor))} ·
+                      Location: ${htmlEscape(printer.latitude != null && printer.longitude != null ? `${printer.latitude}, ${printer.longitude}` : 'Fallback pending')}
+                    </div>
+                    ${profile?.selfServiceEnabled
+                      ? `
+                        ${renderPlatformPrinterForm(snapshot.uiToken, sharedPrinterNames, printer)}
+                        <form method="post" action="/platform-printers/remove" class="js-pending-form" style="margin-top:12px;">
+                          ${hiddenUiToken(snapshot.uiToken)}
+                          <input type="hidden" name="printerId" value="${htmlEscape(printer.printerId)}" />
+                          <button class="btn btn-danger" type="submit" data-pending-text="Unpublishing…">Unpublish printer</button>
+                        </form>
+                      `
+                      : `<div class="muted small">Editing is blocked until the agent is approved.</div>`}
+                  </details>
+                `,
+              )
+              .join('')}
+          </div>`
+        : ''}
+    </div>
+
+    <div class="card">
+      <div class="card-title">Shared local printers</div>
+      <p class="muted small">Only shared local printers can be published as customer-facing platform printers.</p>
+      <table class="data-table" style="margin-top:12px;">
+        <thead><tr><th>Printer</th><th>Capabilities</th><th>Action</th></tr></thead>
+        <tbody>
+          ${snapshot.printers.length === 0
+            ? tableEmptyState({
+                colspan: 3,
+                title: 'No printers detected on this PC yet',
+                text: 'Connect a printer to this computer and install its Windows driver, then refresh to detect it here.',
+                action: `<form method="post" action="/actions/refresh" class="js-pending-form">
+                  ${hiddenUiToken(snapshot.uiToken)}
+                  <button class="btn btn-secondary" type="submit" data-pending-text="Refreshing…">Refresh printers</button>
+                </form>`,
+              })
+            : snapshot.printers.map((printer) => `
+            <tr>
+              <td>
+                <strong>${htmlEscape(printer.localPrinterName)}</strong><br/>
+                <span class="muted small">${htmlEscape(printer.driverName ?? 'Unknown driver')} · ${htmlEscape(printer.connectionType)}</span>
+              </td>
+              <td class="muted small">
+                ${printer.supportsColor ? 'Color' : 'Mono'} ·
+                ${printer.supportsDuplex ? 'Duplex' : 'Single-sided'} ·
+                ${htmlEscape(printer.supportedPaperSizes.join(', ') || 'Unknown sizes')}
+              </td>
+              <td>
+                <form method="post" action="/printers/share" class="js-pending-form">
+                  ${hiddenUiToken(snapshot.uiToken)}
+                  <input type="hidden" name="localPrinterName" value="${htmlEscape(printer.localPrinterName)}" />
+                  <input type="hidden" name="shared" value="${printer.shared ? 'false' : 'true'}" />
+                  <button class="btn btn-secondary" type="submit" data-pending-text="Saving…">${printer.shared ? 'Stop sharing' : 'Share printer'}</button>
+                </form>
+              </td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>`
+}
+
+/**
  * Build the full Coupons page content. Reused by GET /coupons and by the
  * POST /coupons/create handler when a submit fails validation, so the owner's
  * typed values are preserved (P1-5). Handles the gated state (P2-5) and a
@@ -3994,99 +4109,16 @@ export async function startUiServer(runtime: AgentRuntime) {
       </div>
 
       <div class="card">
-        <div class="card-title">Published platform printers</div>
-        <p class="muted small">These are the customer-facing printers published from this machine.</p>
-        ${profile?.selfServiceEnabled
-          ? renderPlatformPrinterForm(snapshot.uiToken, sharedPrinterNames)
-          : `<div class="alert alert-info" style="margin-top:12px;">Admin approval is required before this machine can publish or edit platform printers.</div>`}
-        ${platformPrinters.length === 0
-          ? `<div style="margin-top:12px;">${emptyState({
-              title: 'No printers published to customers yet',
-              text: profile?.selfServiceEnabled
-                ? 'Use the form above to publish your first printer. Once published, customers can find and print to it.'
-                : 'Once your machine is approved, publish a printer here so customers can find and print to it.',
-              action: `<form method="post" action="/actions/refresh" class="js-pending-form">
-                ${hiddenUiToken(snapshot.uiToken)}
-                <button class="btn btn-secondary" type="submit" data-pending-text="Refreshing…">Refresh</button>
-              </form>`,
-            })}</div>`
-          : ''}
-        ${platformPrinters.length > 0
-          ? `<div style="margin-top:16px;">
-              ${platformPrinters
-                .map(
-                  (printer) => `
-                    <details>
-                      <summary>
-                        <span class="summary-row">
-                          <span>${htmlEscape(printer.name)} · <span class="muted">${htmlEscape(printer.agentPrinterName)}</span></span>
-                          <span class="${printer.enabled ? 'badge badge-good' : 'badge'}">${printer.enabled ? 'Enabled' : 'Disabled'}</span>
-                        </span>
-                      </summary>
-                      <div class="muted small" style="margin-bottom:12px;">
-                        Status: ${htmlEscape(humanizeEnum(printer.status))} ·
-                        Base ${htmlEscape(formatMinor(printer.baseJobPriceMinor))} ·
-                        Mono ${htmlEscape(formatMinor(printer.monochromePagePriceMinor))} ·
-                        Color ${htmlEscape(formatMinor(printer.colorPagePriceMinor))} ·
-                        Location: ${htmlEscape(printer.latitude != null && printer.longitude != null ? `${printer.latitude}, ${printer.longitude}` : 'Fallback pending')}
-                      </div>
-                      ${profile?.selfServiceEnabled
-                        ? `
-                          ${renderPlatformPrinterForm(snapshot.uiToken, sharedPrinterNames, printer)}
-                          <form method="post" action="/platform-printers/remove" class="js-pending-form" style="margin-top:12px;">
-                            ${hiddenUiToken(snapshot.uiToken)}
-                            <input type="hidden" name="printerId" value="${htmlEscape(printer.printerId)}" />
-                            <button class="btn btn-danger" type="submit" data-pending-text="Unpublishing…">Unpublish printer</button>
-                          </form>
-                        `
-                        : `<div class="muted small">Editing is blocked until the agent is approved.</div>`}
-                    </details>
-                  `,
-                )
-                .join('')}
-            </div>`
-          : ''}
-      </div>
-
-      <div class="card">
-        <div class="card-title">Shared local printers</div>
-        <p class="muted small">Only shared local printers can be published as customer-facing platform printers.</p>
-        <table class="data-table" style="margin-top:12px;">
-          <thead><tr><th>Printer</th><th>Capabilities</th><th>Action</th></tr></thead>
-          <tbody>
-            ${snapshot.printers.length === 0
-              ? tableEmptyState({
-                  colspan: 3,
-                  title: 'No printers detected on this PC yet',
-                  text: 'Connect a printer to this computer and install its Windows driver, then refresh to detect it here.',
-                  action: `<form method="post" action="/actions/refresh" class="js-pending-form">
-                    ${hiddenUiToken(snapshot.uiToken)}
-                    <button class="btn btn-secondary" type="submit" data-pending-text="Refreshing…">Refresh printers</button>
-                  </form>`,
-                })
-              : snapshot.printers.map((printer) => `
-              <tr>
-                <td>
-                  <strong>${htmlEscape(printer.localPrinterName)}</strong><br/>
-                  <span class="muted small">${htmlEscape(printer.driverName ?? 'Unknown driver')} · ${htmlEscape(printer.connectionType)}</span>
-                </td>
-                <td class="muted small">
-                  ${printer.supportsColor ? 'Color' : 'Mono'} ·
-                  ${printer.supportsDuplex ? 'Duplex' : 'Single-sided'} ·
-                  ${htmlEscape(printer.supportedPaperSizes.join(', ') || 'Unknown sizes')}
-                </td>
-                <td>
-                  <form method="post" action="/printers/share" class="js-pending-form">
-                    ${hiddenUiToken(snapshot.uiToken)}
-                    <input type="hidden" name="localPrinterName" value="${htmlEscape(printer.localPrinterName)}" />
-                    <input type="hidden" name="shared" value="${printer.shared ? 'false' : 'true'}" />
-                    <button class="btn btn-secondary" type="submit" data-pending-text="Saving…">${printer.shared ? 'Stop sharing' : 'Share printer'}</button>
-                  </form>
-                </td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
+        <div class="card-row">
+          <div class="card-title" style="margin-bottom:0;">Printers</div>
+          <a class="card-link" href="/printers">Manage printers →</a>
+        </div>
+        <p class="muted small" style="margin-top:6px;">
+          ${platformPrinters.length} published platform printer${platformPrinters.length === 1 ? '' : 's'} ·
+          ${sharedPrinterNames.length} shared local printer${sharedPrinterNames.length === 1 ? '' : 's'} ·
+          ${snapshot.printers.length} detected on this PC.
+          Open the <a href="/printers">Printers page</a> to share local printers, publish customer-facing platform printers, and edit pricing.
+        </p>
       </div>
 
       ${(() => {
@@ -4142,6 +4174,29 @@ export async function startUiServer(runtime: AgentRuntime) {
     `
 
     response.type('html').send(pageShell({ title: 'Dashboard', activePage: 'dashboard', snapshot, notice, error: errorMessage }, content))
+  })
+
+  // ── Printers ──────────────────────────────────────────────────────────────
+  // KAN-415 Agent Phase 1 — printers used to live as two cards inside
+  // the Dashboard, mixed with status/health/pickup/orders content. On
+  // their own page the operator can focus on the publish + share
+  // workflow without competing for screen real-estate.
+  app.get('/printers', (request, response) => {
+    const snapshot = runtime.snapshot()
+    const notice = typeof request.query.notice === 'string' ? request.query.notice : null
+    const errorMessage = typeof request.query.error === 'string' ? request.query.error : null
+
+    const content = `
+      <div>
+        <div class="page-eyebrow">Operate</div>
+        <div class="page-title">Printers</div>
+        <p class="page-subtitle">Share local printers and publish customer-facing platform printers from this machine.</p>
+      </div>
+      ${renderPrintersPageCards(snapshot)}
+    `
+    response.type('html').send(
+      pageShell({ title: 'Printers', activePage: 'printers', snapshot, notice, error: errorMessage }, content),
+    )
   })
 
   // ── Setup (Backend configuration) ─────────────────────────────────────────
