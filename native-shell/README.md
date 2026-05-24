@@ -34,10 +34,42 @@ than `.ps1` scripts in the Start Menu.
 ## What it does NOT do yet
 
 - No native auto-updater (defer to Phase 2d).
-- No MSI / MSIX installer (defer to Phase 2c — WiX likely).
-- No code signing (the EXE will SmartScreen-warn until a real
-  EV cert is purchased and wired into the build script).
+- No code signing (the EXE + MSI will SmartScreen-warn until a real
+  EV cert is purchased and wired into the build scripts).
 - No WebView2 embed — "Open UI" still opens the system browser.
+
+## MSI installer (Phase 2c)
+
+`PrintAnywhereAgent.Installer/` is a WiX 5 project that produces a
+per-user MSI:
+
+- Installs into `%LOCALAPPDATA%\Dhruvanta Systems\PrintAnywhereAgent\printanywhere-agent-vX.Y.Z\`
+  (the same layout `scripts/install-release.ps1` produces, so the
+  native tray's `InstallLayout.Discover()` finds it identically)
+- Start Menu shortcut targeting `PrintAnywhereAgent.exe`
+- Add/Remove Programs entry under "PrintAnywhere Agent"
+- In-place upgrade via the stable `UpgradeCode` GUID +
+  `MajorUpgrade` — v0.1.32 cleanly replaces v0.1.31
+- Silent install today (operator double-clicks; install runs without
+  UI; tray appears when the agent registers); WixUI wizard is a
+  follow-up
+
+**Build:** `node scripts/build-native-msi.mjs` chains the native-tray
+build and the MSI build. WiX 5 only supports Windows builds — the
+Linux command will fail at the wix step (the .NET tray compile still
+runs). `.github/workflows/native-shell.yml` is the authoritative CI
+gate; it runs on `windows-latest` and uploads the EXE + MSI as
+workflow artifacts.
+
+**MSI test plan (real Windows):**
+
+1. Build via the `native-shell` workflow; download `printanywhere-agent-msi`.
+2. Double-click the MSI on a clean Windows VM. Install completes silently.
+3. Confirm Start Menu → Dhruvanta Systems → PrintAnywhere Agent launches the tray.
+4. Confirm Settings → Apps → PrintAnywhere Agent shows the entry; uninstall via that path.
+5. Re-install the same version → MSI repairs (no error).
+6. Install v0.1.32 over v0.1.31 → upgrade-in-place; only one
+   `printanywhere-agent-v*` dir remains; the v0.1.31 dir is removed.
 
 ## Build
 

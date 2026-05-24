@@ -1,0 +1,101 @@
+name: Native shell
+
+# Phase 2b + 2c — builds the native Windows tray EXE + the MSI
+# installer on a real Windows runner. Linux can compile-validate
+# the .NET tray project but NOT the .wixproj (WiX 5 explicitly
+# refuses non-Windows builds); this workflow is the authoritative
+# gate that the MSI builds end-to-end.
+#
+# Runs on PRs touching native-shell/ or scripts/build-native-tray.mjs
+# and on push to main. Produces (and uploads as artifacts):
+#   * PrintAnywhereAgent.exe  (self-contained single-file native tray)
+#   * PrintAnywhereAgent-<version>.msi  (per-user installer)
+
+on:
+  pull_request:
+    paths:
+      - 'native-shell/**'
+      - 'scripts/build-native-tray.mjs'
+      - '.github/workflows/native-shell.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'native-shell/**'
+      - 'scripts/build-native-tray.mjs'
+      - '.github/workflows/native-shell.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build native EXE + MSI
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Resolve PA version
+        id: version
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "PrintAnywhere Agent version: $version"
+
+      - name: Build native tray EXE
+        shell: pwsh
+        run: node scripts/build-native-tray.mjs
+
+      - name: Stage MSI payload
+        # The MSI HarvestDirectory consumes everything in payload/ as
+        # the install content. For now we drop in just the native EXE
+        # so the MSI scaffolding is real-Windows verified; subsequent
+        # iterations will stage the full release bundle (dist/,
+        # node-win-x64/, scripts/) into this dir before the MSI build.
+        shell: pwsh
+        run: |
+          $payload = "native-shell/PrintAnywhereAgent.Installer/payload"
+          New-Item -ItemType Directory -Force -Path $payload | Out-Null
+          Copy-Item artifacts/native-shell/PrintAnywhereAgent.exe $payload/ -Force
+
+      - name: Build MSI
+        shell: pwsh
+        run: |
+          $payload = (Resolve-Path "native-shell/PrintAnywhereAgent.Installer/payload").Path
+          dotnet build native-shell/PrintAnywhereAgent.Installer/PrintAnywhereAgent.Installer.wixproj `
+            -c Release `
+            -p:PrintAnywhereAgentVersion=${{ steps.version.outputs.version }} `
+            -p:PayloadSource=$payload
+
+      - name: Upload native EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: printanywhere-agent-native-exe
+          path: artifacts/native-shell/PrintAnywhereAgent.exe
+          if-no-files-found: error
+
+      - name: Upload MSI
+        uses: actions/upload-artifact@v4
+        with:
+          name: printanywhere-agent-msi
+          path: native-shell/PrintAnywhereAgent.Installer/bin/Release/**/*.msi
+          if-no-files-found: error

@@ -1,0 +1,67 @@
+<Project Sdk="WixToolset.Sdk/5.0.2">
+
+  <!--
+    Phase 2c — WiX 5 MSI installer for PrintAnywhereAgent.
+
+    Goals:
+      * Per-user install (no admin needed) into the existing
+        %LOCALAPPDATA%\Dhruvanta Systems\PrintAnywhereAgent\
+        layout so the native tray EXE + the stable launcher CMD +
+        the release-bundle dist files all coexist.
+      * Add/Remove Programs entry so an operator can uninstall via
+        Windows Settings, not a hidden uninstall.ps1.
+      * In-place upgrade via UpgradeCode + MajorUpgrade so v0.1.32
+        cleanly replaces v0.1.31 with no orphan files.
+      * Start Menu shortcut pointing at the native EXE.
+
+    Build (Linux / macOS / Windows with the Microsoft-distributed
+    .NET SDK):
+
+      dotnet build -c Release \
+        -p:PrintAnywhereAgentVersion=0.1.31 \
+        -p:PayloadSource=$(pwd)/payload
+
+    Output: bin/Release/en-US/PrintAnywhereAgent-0.1.31.msi
+
+    The PayloadSource property points at a staged directory that
+    holds the bundle contents (dist/, node-win-x64/, scripts/,
+    config/, assets/) PLUS the freshly built
+    PrintAnywhereAgent.exe at the root. The release-bundle
+    scripts/build-native-msi.mjs wraps this whole pipeline.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Package</OutputType>
+    <OutputName>PrintAnywhereAgent-$(PrintAnywhereAgentVersion)</OutputName>
+
+    <!-- WiX must materialise the harvested files at compile time so
+         payload changes are reflected in the produced MSI. -->
+    <DefineConstants>
+      PrintAnywhereAgentVersion=$(PrintAnywhereAgentVersion);
+      PayloadSource=$(PayloadSource)
+    </DefineConstants>
+  </PropertyGroup>
+
+  <!-- The HarvestDirectory item is the WiX 5 successor to the
+       heat.exe tool: it walks PayloadSource at build time and
+       produces a ComponentGroup of File/Component entries. Caller
+       references the generated ComponentGroup id from Product.wxs
+       via <ComponentGroupRef Id="PayloadComponents" />. -->
+  <ItemGroup>
+    <HarvestDirectory Include="$(PayloadSource)">
+      <ComponentGroupName>PayloadComponents</ComponentGroupName>
+      <DirectoryRefId>INSTALLDIR</DirectoryRefId>
+      <SuppressRootDirectory>true</SuppressRootDirectory>
+      <SuppressCom>true</SuppressCom>
+      <SuppressRegistry>true</SuppressRegistry>
+    </HarvestDirectory>
+  </ItemGroup>
+
+  <!-- WixToolset.Util.wixext for ARP polish + future custom actions.
+       The WixToolset.UI.wixext (install wizard) is a follow-up; the
+       current MSI installs silently. -->
+  <ItemGroup>
+    <PackageReference Include="WixToolset.Util.wixext" Version="5.0.2" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,103 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+
+  <!--
+    Phase 2c — PrintAnywhereAgent MSI authoring.
+
+    UpgradeCode is the stable GUID that identifies the product
+    across versions. Generated once; NEVER changed. A new
+    UpgradeCode means Windows treats the new MSI as a different
+    product (won't replace the old install, won't show as upgrade
+    in Add/Remove Programs) — operators would end up with two
+    PrintAnywhere Agent entries.
+  -->
+  <Package
+      Name="PrintAnywhere Agent"
+      Manufacturer="Dhruvanta Systems"
+      Version="$(PrintAnywhereAgentVersion)"
+      UpgradeCode="9C7E5E13-3D7A-4E5B-9F42-2F2D5B7B6E11"
+      Scope="perUser"
+      Compressed="yes">
+
+    <SummaryInformation Description="PrintAnywhere Agent for Windows" />
+
+    <!-- In-place upgrade. AllowSameVersionUpgrades=yes so a re-run
+         of the same version installer (e.g. operator clicks the
+         setup EXE twice) repairs instead of conflicting. -->
+    <MajorUpgrade
+        AllowSameVersionUpgrades="yes"
+        DowngradeErrorMessage="A newer version of PrintAnywhere Agent is already installed. Uninstall it first from Settings → Apps before installing this version." />
+
+    <!-- Single .cab embedded inside the MSI so operators only have
+         one file to download. -->
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <!-- Per-user install layout — mirrors the existing
+         %LOCALAPPDATA%\Dhruvanta Systems\PrintAnywhereAgent\
+         printanywhere-agent-vX.Y.Z\ convention so the native
+         tray's InstallLayout.Discover() finds it. -->
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ManufacturerDir" Name="Dhruvanta Systems">
+        <Directory Id="ProductDir" Name="PrintAnywhereAgent">
+          <Directory Id="INSTALLDIR" Name="printanywhere-agent-v$(PrintAnywhereAgentVersion)">
+            <!-- HarvestDirectory in the wixproj fills this dir at
+                 build time via ComponentGroupRef below. -->
+          </Directory>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <!-- Start Menu shortcut targeting the native tray EXE. -->
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ApplicationProgramsFolder" Name="Dhruvanta Systems" />
+    </StandardDirectory>
+
+    <DirectoryRef Id="ApplicationProgramsFolder">
+      <Component Id="ApplicationShortcuts" Guid="*">
+        <Shortcut Id="ApplicationStartMenuShortcut"
+                  Name="PrintAnywhere Agent"
+                  Description="Open the PrintAnywhere Agent tray controls."
+                  Target="[INSTALLDIR]PrintAnywhereAgent.exe"
+                  WorkingDirectory="INSTALLDIR" />
+        <RemoveFolder Id="CleanUpProgramsFolder"
+                      Directory="ApplicationProgramsFolder"
+                      On="uninstall" />
+        <!-- Per-user MSIs need a per-user registry key to anchor
+             the component (Windows uses it as the KeyPath for
+             reference counting on uninstall). -->
+        <RegistryValue Root="HKCU"
+                       Key="Software\Dhruvanta Systems\PrintAnywhereAgent"
+                       Name="StartMenuShortcut"
+                       Type="integer"
+                       Value="1"
+                       KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <!-- ARP (Add/Remove Programs) polish so the entry is recognisable. -->
+    <Property Id="ARPCONTACT" Value="support@dhruvantasystems.com" />
+    <Property Id="ARPHELPLINK" Value="https://printanywhere.dhruvantasystems.com/" />
+    <Property Id="ARPNOREPAIR" Value="1" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+
+    <!-- The harvested ComponentGroup wires up every file in
+         PayloadSource as a component under INSTALLDIR. -->
+    <Feature Id="MainFeature"
+             Title="PrintAnywhere Agent"
+             Level="1"
+             Display="expand"
+             AllowAdvertise="no"
+             InstallDefault="local"
+             AllowAbsent="no">
+      <ComponentGroupRef Id="PayloadComponents" />
+      <ComponentRef Id="ApplicationShortcuts" />
+    </Feature>
+
+    <!-- Phase 2c-follow-up: switch to WixUI_InstallDir wizard once
+         the WixToolset.UI.wixext namespace mapping is wired up.
+         Silent install for now — operator double-clicks the MSI,
+         install runs without UI, tray appears in the notification
+         area when the agent finishes registering. -->
+
+  </Package>
+</Wix>
