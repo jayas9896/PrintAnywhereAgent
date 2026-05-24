@@ -302,8 +302,16 @@ function redirectTo(response: Response, path: string, type: 'notice' | 'error', 
   response.redirect(url.pathname + url.search)
 }
 
-function redirectWithStatus(response: Response, type: 'notice' | 'error', message: string) {
-  redirectTo(response, '/', type, message)
+function redirectWithStatus(
+  response: Response,
+  type: 'notice' | 'error',
+  message: string,
+  // Phase 1.5a — optional override so /login flows return the
+  // operator to /login instead of the dashboard. Existing callers
+  // continue to default to '/'.
+  path: string = '/',
+) {
+  redirectTo(response, path, type, message)
 }
 
 function friendlyConfigureError(error: unknown) {
@@ -2332,6 +2340,19 @@ function pageShell(
       ],
     },
     {
+      label: 'Account',
+      items: [
+        // Phase 1.5a — local staff sign-in. Label flips between
+        // "Sign in" / signed-in email so the operator can see at a
+        // glance whether the agent has an active staff identity.
+        {
+          href: '/login',
+          label: snapshot.staffSession?.email ?? 'Sign in',
+          id: 'login',
+        },
+      ],
+    },
+    {
       label: 'Resources',
       items: [
         { href: '/help', label: 'Help & FAQ', id: 'help' },
@@ -4204,6 +4225,87 @@ export async function startUiServer(runtime: AgentRuntime) {
   // Lifts the configure-form card out of the Dashboard so first-time setup
   // has a clear destination from the left-nav. POST /configure still
   // handles persistence; this page just renders the form.
+  // ── Staff login (Phase 1.5a) ─────────────────────────────────────────────
+  // Operator signs into the local Agent UI as a PA staff user. Sessions
+  // are local-only today (1.5a) — page gating + upstream-call use
+  // ride on 1.5b. The token is stored encrypted at rest with the
+  // per-machine key.
+  app.get('/login', (request, response) => {
+    const snapshot = runtime.snapshot()
+    const notice = typeof request.query.notice === 'string' ? request.query.notice : null
+    const errorMessage = typeof request.query.error === 'string' ? request.query.error : null
+    const identity = runtime.staffIdentity()
+    const content = `
+      <div>
+        <div class="page-eyebrow">Account</div>
+        <div class="page-title">Staff sign-in</div>
+        <p class="page-subtitle">Sign in as a PrintAnywhere staff user (store owner, store worker, sales, support). Today this is a local-only sign-in; page-level capability gating ships in the next slice.</p>
+      </div>
+      ${identity ? `
+        <div class="card">
+          <div class="card-title">Signed in</div>
+          <p>${htmlEscape(identity.email)} &middot; roles: ${htmlEscape(identity.roles.join(', ') || 'none')}</p>
+          <p class="muted small">Session expires ${htmlEscape(formatTimestamp(identity.expiresAt))}.</p>
+          <form method="post" action="/logout" class="js-pending-form" style="margin-top:10px;">
+            ${hiddenUiToken(snapshot.uiToken)}
+            <button type="submit" class="btn btn-secondary">Sign out</button>
+          </form>
+        </div>
+      ` : `
+        <div class="card">
+          <div class="card-title">Sign in</div>
+          <form method="post" action="/login" class="stack js-pending-form">
+            ${hiddenUiToken(snapshot.uiToken)}
+            <label>
+              <div class="label-text">Email</div>
+              <input type="email" name="email" required autocomplete="username" />
+            </label>
+            <label>
+              <div class="label-text">Password</div>
+              <input type="password" name="password" required autocomplete="current-password" />
+            </label>
+            <label>
+              <div class="label-text">TOTP code (if you have one enrolled)</div>
+              <input type="text" name="totp" inputmode="numeric" autocomplete="one-time-code" />
+              <div class="hint">Leave blank if you do not have TOTP enrolled.</div>
+            </label>
+            <div class="btn-row">
+              <button class="btn btn-primary" type="submit" data-pending-text="Signing in…">Sign in</button>
+            </div>
+          </form>
+        </div>
+      `}
+    `
+    response.type('html').send(
+      pageShell({ title: 'Staff sign-in', activePage: 'login', snapshot, notice, error: errorMessage }, content),
+    )
+  })
+
+  app.post('/login', async (request, response) => {
+    if (!verifyUiRequest(runtime, request, response)) return
+    const body = request.body as Record<string, unknown>
+    const email = String(body.email ?? '').trim()
+    const password = String(body.password ?? '')
+    const totp = body.totp ? String(body.totp).trim() : null
+    if (!email || !password) {
+      redirectWithStatus(response, 'error', 'Enter your email and password.', '/login')
+      return
+    }
+    try {
+      await runtime.signInStaff(email, password, totp || null)
+      redirectWithStatus(response, 'notice', 'Signed in.', '/login')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Sign in failed.'
+      redirectWithStatus(response, 'error', message, '/login')
+    }
+  })
+
+  app.post('/logout', async (request, response) => {
+    if (!verifyUiRequest(runtime, request, response)) return
+    await runtime.signOutStaff()
+    redirectWithStatus(response, 'notice', 'Signed out.', '/login')
+  })
+
   app.get('/setup', (request, response) => {
     const snapshot = runtime.snapshot()
     const notice = typeof request.query.notice === 'string' ? request.query.notice : null

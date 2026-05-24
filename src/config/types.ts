@@ -52,6 +52,21 @@ export interface AgentRegistrationState {
   status?: string | null
 }
 
+/**
+ * Phase 1.5a — local-only staff session captured by the Agent /login
+ * page. The {@code encryptedAccessToken} holds the staff JWT
+ * (encrypted at rest with the per-machine key) so the operator's
+ * staff identity persists across agent restarts without leaking the
+ * raw token to disk.
+ */
+export interface StaffSessionState {
+  email: string
+  roles: string[]
+  encryptedAccessToken: string
+  expiresAt: string
+  signedInAt: string
+}
+
 export interface LastJobSnapshot {
   jobId: string
   printerName: string
@@ -166,6 +181,14 @@ export interface AgentState {
   intendedBusinessId?: string | null
   identity?: StoredIdentity | null
   registration?: AgentRegistrationState | null
+  /**
+   * Phase 1.5a — staff JWT session captured by the operator via the
+   * Agent /login page. Encrypted at rest. Cleared on /logout. Pure
+   * local-UI gating today (1.5b will gate page visibility on the
+   * roles list); no upstream call uses this token yet — agent-to-
+   * backend calls still use the agent secret + HMAC signature.
+   */
+  staffSession?: StaffSessionState | null
   uiToken?: string | null
   sharedPrinters: Record<string, boolean>
   printers: LocalPrinter[]

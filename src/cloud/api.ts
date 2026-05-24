@@ -254,6 +254,31 @@ export class CloudApiClient {
     }
   }
 
+  /**
+   * Phase 1.5a — staff login proxy. Forwards email/password (+optional
+   * TOTP) to the PA staff auth endpoint and returns the access token,
+   * email, roles, and expiry. The Agent stores these locally so the
+   * operator's staff identity persists across restarts.
+   */
+  async staffLogin(payload: { email: string; password: string; totp?: string | null }) {
+    const response = await fetch(`${this.serverUrl}/api/staff/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    if (!response.ok) {
+      throw apiError(response, await response.text())
+    }
+    const body = (await response.json()) as {
+      accessToken: string
+      tokenType: string
+      expiresInSeconds: number
+      email: string
+      roles: string[]
+    }
+    return body
+  }
+
   async register(payload: {
     machineId: string
     agentVersion: string

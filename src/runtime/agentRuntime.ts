@@ -111,6 +111,50 @@ export class AgentRuntime {
     await this.heartbeatTick()
   }
 
+  /**
+   * Phase 1.5a — operator signs in as a PA staff user. Forwards
+   * credentials to the backend, encrypts the returned access token
+   * with the per-machine key, and persists the session so it
+   * survives restarts. Throws on auth failure; the caller surfaces
+   * the message.
+   */
+  async signInStaff(email: string, password: string, totp?: string | null) {
+    if (!this.state.serverUrl) {
+      throw new Error('Configure the PrintAnywhere backend URL before signing in.')
+    }
+    const client = this.requireClient()
+    const result = await client.staffLogin({ email, password, totp })
+    const expiresAt = new Date(Date.now() + result.expiresInSeconds * 1000).toISOString()
+    this.state.staffSession = {
+      email: result.email,
+      roles: result.roles ?? [],
+      encryptedAccessToken: encryptString(result.accessToken, this.machineKey),
+      expiresAt,
+      signedInAt: new Date().toISOString(),
+    }
+    this.state.lastError = null
+    await this.store.save(this.state)
+  }
+
+  async signOutStaff() {
+    if (!this.state.staffSession) return
+    this.state.staffSession = null
+    await this.store.save(this.state)
+  }
+
+  /**
+   * Phase 1.5a — convenience for the page renderers: returns the
+   * staff identity without leaking the encrypted token to callers.
+   * The token stays encrypted in {@code state.staffSession}; future
+   * upstream calls that need it will go through a dedicated
+   * accessor.
+   */
+  staffIdentity(): { email: string; roles: string[]; expiresAt: string } | null {
+    const s = this.state.staffSession
+    if (!s) return null
+    return { email: s.email, roles: s.roles, expiresAt: s.expiresAt }
+  }
+
   async setPrinterShared(localPrinterName: string, shared: boolean) {
     this.state.sharedPrinters[localPrinterName] = shared
     this.state.printers = this.state.printers.map((printer) =>
