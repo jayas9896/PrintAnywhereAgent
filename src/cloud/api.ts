@@ -260,6 +260,10 @@ export class CloudApiClient {
     osVersion: string
     publicKey: string
     displayName?: string | null
+    // KAN-418 — operator-supplied Business UUID the agent install
+    // declares itself to belong to. Optional: if absent, the admin
+    // assigns a Business during the KAN-419 approval handshake.
+    intendedBusinessId?: string | null
   }) {
     const response = await fetch(`${this.serverUrl}/api/agent/register`, {
       method: 'POST',

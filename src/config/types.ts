@@ -157,6 +157,13 @@ export interface AgentState {
   serverUrl?: string | null
   displayName?: string | null
   reportedBusinessAddress?: string | null
+  /**
+   * KAN-418 — UUID of the Business the operator entered on the
+   * Backend configuration page. Forwarded to the backend on register
+   * (and re-register). Optional: when null, the platform admin
+   * assigns a Business during the KAN-419 approval handshake.
+   */
+  intendedBusinessId?: string | null
   identity?: StoredIdentity | null
   registration?: AgentRegistrationState | null
   uiToken?: string | null

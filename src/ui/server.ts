@@ -1849,6 +1849,15 @@ function renderConfigureForm(
         <div class="hint">The platform admin reviews this when approving your shop.</div>
         ${fieldError(sticky, 'reportedBusinessAddress')}
       </label>
+      <label class="${errClass('intendedBusinessId').trim()}">
+        <div class="label-text">Business ID (optional)</div>
+        <input type="text" name="intendedBusinessId"
+          value="${htmlEscape(stickyValue(sticky, 'intendedBusinessId', snapshot.intendedBusinessId ?? null))}"
+          placeholder="e.g. 8c63ce83-a622-428d-8baa-474b45e0f8f1"
+          pattern="^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" />
+        <div class="hint">If this PC belongs to a Business that is already onboarded (e.g. another PC at the same shop is already paired), paste the Business ID your platform admin gave you. Leave blank otherwise — the admin will create a new Business and bind this PC during approval.</div>
+        ${fieldError(sticky, 'intendedBusinessId')}
+      </label>
       <label class="${errClass('serverUrl').trim()}">
         <div class="label-text">PrintAnywhere server address</div>
         <input type="url" name="serverUrl" value="${htmlEscape(stickyValue(sticky, 'serverUrl', configuredServerUrl))}" placeholder="${htmlEscape(defaultPrintAnywhereBackendUrl())}" required />
@@ -4699,6 +4708,10 @@ export async function startUiServer(runtime: AgentRuntime) {
         serverUrl,
         String(body.displayName ?? ''),
         String(body.reportedBusinessAddress ?? ''),
+        // KAN-418 — optional Business UUID. The runtime tolerates a
+        // blank string (treated as null) and rejects non-UUID
+        // strings before persisting.
+        String(body.intendedBusinessId ?? ''),
       )
       const location = parseBrowserLocationBody(body)
       if (location) await runtime.setBrowserLocation(location)

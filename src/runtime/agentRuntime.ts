@@ -82,13 +82,25 @@ export class AgentRuntime {
     return !!this.state.uiToken && !!token && this.state.uiToken === token
   }
 
-  async configure(serverUrl: string, displayName?: string | null, reportedBusinessAddress?: string | null) {
+  async configure(
+    serverUrl: string,
+    displayName?: string | null,
+    reportedBusinessAddress?: string | null,
+    intendedBusinessId?: string | null,
+  ) {
     const nextServerUrl = normalizeServerUrl(serverUrl || defaultPrintAnywhereBackendUrl())
     const previousServerUrl = this.state.serverUrl ? normalizeServerUrl(this.state.serverUrl) : null
     const hasExistingRegistration = !!this.state.registration?.agentId && !!this.state.registration?.encryptedAgentSecret
     this.state.serverUrl = nextServerUrl
     this.state.displayName = displayName?.trim() || null
     this.state.reportedBusinessAddress = reportedBusinessAddress?.trim() || null
+    // KAN-418 — accept and persist the operator's declared Business
+    // UUID. Treat any non-UUID string the operator typed as "leave
+    // unset" so a bad paste does not poison subsequent register
+    // attempts; the backend would reject it 400 anyway.
+    const trimmedBiz = intendedBusinessId?.trim() || null
+    this.state.intendedBusinessId =
+      trimmedBiz && isUuidLike(trimmedBiz) ? trimmedBiz : null
     this.state.lastError = null
     await this.store.save(this.state)
     if (!hasExistingRegistration || previousServerUrl !== nextServerUrl) {
@@ -344,6 +356,7 @@ export class AgentRuntime {
       osVersion: `${os.platform()} ${os.release()}`,
       publicKey: identity.publicKeyPem,
       displayName: this.state.displayName,
+      intendedBusinessId: this.state.intendedBusinessId ?? null,
     })
     this.state.registration = {
       agentId: response.agentId,
@@ -778,6 +791,15 @@ function normalizeServerUrl(raw: string) {
     throw new Error('PrintAnywhere backend URL must use HTTPS unless it is localhost or insecure mode is explicitly enabled')
   }
   return value
+}
+
+// KAN-418 — strict UUID shape check used to reject pasted garbage in
+// the operator-supplied intendedBusinessId field before it reaches
+// the backend (which would 400 it anyway, but failing early avoids a
+// register round-trip + a confusing error banner).
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+function isUuidLike(value: string): boolean {
+  return UUID_PATTERN.test(value)
 }
 
 function defaultStats() {
