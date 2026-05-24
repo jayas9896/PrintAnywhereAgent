@@ -94,12 +94,22 @@ function New-AgentShortcut {
     param(
         [string]$ShortcutPath,
         [string]$Arguments,
-        [string]$Description
+        [string]$Description,
+        # Phase 2a — optional. Defaults to powershell.exe (the old
+        # behaviour). When supplied (typically the stable launcher
+        # CMD), the shortcut targets that path directly so a version
+        # update only has to rewrite the CMD on disk; the .lnk stays
+        # valid.
+        [string]$TargetPath = ""
     )
 
     $shell = New-Object -ComObject WScript.Shell
     $shortcut = $shell.CreateShortcut($ShortcutPath)
-    $shortcut.TargetPath = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+    if ([string]::IsNullOrWhiteSpace($TargetPath)) {
+        $shortcut.TargetPath = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+    } else {
+        $shortcut.TargetPath = $TargetPath
+    }
     $shortcut.Arguments = $Arguments
     $shortcut.WorkingDirectory = $repoRoot
     $shortcut.Description = $Description
@@ -119,6 +129,79 @@ function Test-ManagedPerUserInstall {
 
     $expectedRoot = Join-Path $env:LOCALAPPDATA "Dhruvanta Systems\PrintAnywhereAgent"
     return $RepoRoot.StartsWith($expectedRoot, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+# Phase 2a — write stable launcher CMDs in $installRoot\bin so that
+# scheduled tasks and Startup shortcuts can target a fixed path that
+# is rewritten on every install. Without this, the tasks/shortcuts
+# point at the version-pinned script (e.g.
+# ".../printanywhere-agent-v0.1.31/scripts/agent-tray.ps1") and
+# Remove-OlderManagedVersions silently breaks them on the next
+# update — the tray icon never comes back after the install
+# finishes.
+#
+# The launchers resolve the latest "printanywhere-agent-v*"
+# directory at runtime and forward every argument to the matching
+# script there. They are pure CMD (no PowerShell session bootstrap)
+# so they survive even if the operator's PowerShell ExecutionPolicy
+# changes between versions.
+function Write-StableLaunchers {
+    param([string]$RepoRoot)
+
+    if (-not (Test-ManagedPerUserInstall -RepoRoot $RepoRoot)) {
+        return $null
+    }
+
+    $installRoot = Split-Path -Parent $RepoRoot
+    $binDir = Join-Path $installRoot "bin"
+    New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+
+    # CMD template — argument %1 is the script name (e.g.
+    # "agent-tray.ps1"), the rest pass through to the script.
+    $launcherBody = @'
+@echo off
+setlocal enabledelayedexpansion
+set "INSTALL_ROOT=%LOCALAPPDATA%\Dhruvanta Systems\PrintAnywhereAgent"
+set "SCRIPT_NAME=%~1"
+shift /1
+
+if "%SCRIPT_NAME%"=="" (
+    echo Stable launcher requires the target script name as the first argument. 1>&2
+    exit /b 2
+)
+
+set "VERSION_DIR="
+for /f "delims=" %%i in ('dir "%INSTALL_ROOT%\printanywhere-agent-v*" /b /ad /o-n 2^>nul') do (
+    set "VERSION_DIR=%%i"
+    goto :found
+)
+echo PrintAnywhere Agent install not found under "%INSTALL_ROOT%". 1>&2
+exit /b 3
+
+:found
+set "TARGET=%INSTALL_ROOT%\%VERSION_DIR%\scripts\%SCRIPT_NAME%"
+if not exist "%TARGET%" (
+    echo Target script not found: "%TARGET%" 1>&2
+    exit /b 4
+)
+
+REM Forward every remaining arg to powershell.
+set "PS_ARGS="
+:collect
+if "%~1"=="" goto :run
+set "PS_ARGS=!PS_ARGS! %1"
+shift /1
+goto :collect
+
+:run
+powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%TARGET%" !PS_ARGS!
+exit /b %ERRORLEVEL%
+'@
+
+    $launcherPath = Join-Path $binDir "agent-launcher.cmd"
+    Set-Content -LiteralPath $launcherPath -Value $launcherBody -Encoding ASCII
+    Write-Host "Wrote stable launcher: $launcherPath"
+    return $launcherPath
 }
 
 function Normalize-PathForComparison {
@@ -377,6 +460,8 @@ if ($hostsOk -and $certOk) {
     Write-Warning "Local HTTPS UI smoke check: hostsOk=$hostsOk, certOk=$certOk. The agent will still serve https://127.0.0.1:$Port. Re-run the installer as administrator, or after first launch click 'Repair local URL setup' on the agent dashboard."
 }
 
+$stableLauncher = Write-StableLaunchers -RepoRoot $repoRoot
+
 if (Test-ManagedPerUserInstall -RepoRoot $repoRoot) {
     $installRoot = Split-Path -Parent $repoRoot
     Protect-AgentPath -Path $installRoot
@@ -388,16 +473,29 @@ if (Test-ManagedPerUserInstall -RepoRoot $repoRoot) {
 }
 
 if ($RegisterStartupTask) {
-    $runScript = Join-Path $repoRoot "scripts\\start-agent-background.ps1"
-    $action = New-ScheduledTaskAction `
-        -Execute "powershell.exe" `
-        -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$runScript`" -EnvFile `"$envFilePath`" -DataDir `"$DataDir`" -Port $Port"
     $trigger = New-ScheduledTaskTrigger -AtLogOn
     $principal = New-ScheduledTaskPrincipal -UserId ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Limited
-    $trayScript = Join-Path $repoRoot "scripts\\agent-tray.ps1"
-    $trayAction = New-ScheduledTaskAction `
-        -Execute "powershell.exe" `
-        -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$trayScript`" -EnvFile `"$envFilePath`" -DataDir `"$DataDir`" -Port $Port"
+
+    # Phase 2a — managed installs invoke the stable launcher so a
+    # later version update does not orphan the scheduled task at
+    # the previous version's file path. Non-managed (zip-extracted)
+    # installs fall back to the original direct-script invocation
+    # since they have no $installRoot to anchor the launcher to.
+    if ($stableLauncher) {
+        $startArgument = "/c `"$stableLauncher`" start-agent-background.ps1 -EnvFile `"$envFilePath`" -DataDir `"$DataDir`" -Port $Port"
+        $trayArgument = "/c `"$stableLauncher`" agent-tray.ps1 -EnvFile `"$envFilePath`" -DataDir `"$DataDir`" -Port $Port"
+        $action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument $startArgument
+        $trayAction = New-ScheduledTaskAction -Execute "cmd.exe" -Argument $trayArgument
+    } else {
+        $runScript = Join-Path $repoRoot "scripts\\start-agent-background.ps1"
+        $trayScript = Join-Path $repoRoot "scripts\\agent-tray.ps1"
+        $action = New-ScheduledTaskAction `
+            -Execute "powershell.exe" `
+            -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$runScript`" -EnvFile `"$envFilePath`" -DataDir `"$DataDir`" -Port $Port"
+        $trayAction = New-ScheduledTaskAction `
+            -Execute "powershell.exe" `
+            -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$trayScript`" -EnvFile `"$envFilePath`" -DataDir `"$DataDir`" -Port $Port"
+    }
 
     try {
         Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
@@ -407,14 +505,29 @@ if ($RegisterStartupTask) {
     } catch {
         Write-Warning "Scheduled Task registration failed. Falling back to per-user Startup folder shortcuts."
         $startup = [Environment]::GetFolderPath("Startup")
-        New-AgentShortcut `
-            -ShortcutPath (Join-Path $startup "PrintAnywhere Agent Background.lnk") `
-            -Arguments "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$runScript`" -EnvFile `"$envFilePath`" -DataDir `"$DataDir`" -Port $Port" `
-            -Description "Start the Dhruvanta PrintAnywhere Agent in the background at sign-in."
-        New-AgentShortcut `
-            -ShortcutPath (Join-Path $startup "PrintAnywhere Agent Tray.lnk") `
-            -Arguments "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$trayScript`" -EnvFile `"$envFilePath`" -DataDir `"$DataDir`" -Port $Port" `
-            -Description "Show the Dhruvanta PrintAnywhere Agent tray controls at sign-in."
+        if ($stableLauncher) {
+            New-AgentShortcut `
+                -ShortcutPath (Join-Path $startup "PrintAnywhere Agent Background.lnk") `
+                -TargetPath $stableLauncher `
+                -Arguments "start-agent-background.ps1 -EnvFile `"$envFilePath`" -DataDir `"$DataDir`" -Port $Port" `
+                -Description "Start the Dhruvanta PrintAnywhere Agent in the background at sign-in."
+            New-AgentShortcut `
+                -ShortcutPath (Join-Path $startup "PrintAnywhere Agent Tray.lnk") `
+                -TargetPath $stableLauncher `
+                -Arguments "agent-tray.ps1 -EnvFile `"$envFilePath`" -DataDir `"$DataDir`" -Port $Port" `
+                -Description "Show the Dhruvanta PrintAnywhere Agent tray controls at sign-in."
+        } else {
+            $runScript = Join-Path $repoRoot "scripts\\start-agent-background.ps1"
+            $trayScript = Join-Path $repoRoot "scripts\\agent-tray.ps1"
+            New-AgentShortcut `
+                -ShortcutPath (Join-Path $startup "PrintAnywhere Agent Background.lnk") `
+                -Arguments "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$runScript`" -EnvFile `"$envFilePath`" -DataDir `"$DataDir`" -Port $Port" `
+                -Description "Start the Dhruvanta PrintAnywhere Agent in the background at sign-in."
+            New-AgentShortcut `
+                -ShortcutPath (Join-Path $startup "PrintAnywhere Agent Tray.lnk") `
+                -Arguments "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$trayScript`" -EnvFile `"$envFilePath`" -DataDir `"$DataDir`" -Port $Port" `
+                -Description "Show the Dhruvanta PrintAnywhere Agent tray controls at sign-in."
+        }
         Write-Host "Created Startup folder shortcuts."
     }
 }
@@ -431,28 +544,54 @@ if ($CreateShortcuts) {
     $updateScript = Join-Path $repoRoot "scripts\check-update.ps1"
     $uninstallScript = Join-Path $repoRoot "scripts\uninstall-agent.ps1"
 
-    $commonStartArgs = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$startScript`" -EnvFile `"$envFilePath`" -DataDir `"$DataDir`" -Port $Port -OpenUi"
-    $commonTrayArgs = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$trayScript`" -EnvFile `"$envFilePath`" -DataDir `"$DataDir`" -Port $Port"
+    # Phase 2a — when running a managed install, route the
+    # frequently-used shortcuts (Agent + Tray + Stop) through the
+    # stable launcher so a later version update only has to rewrite
+    # the launcher CMD; the .lnk paths in Desktop / Start Menu stay
+    # valid. Less-frequent shortcuts (Update, Uninstall) are kept on
+    # the version-pinned path — they are always invoked manually so
+    # an operator who runs them does not benefit from launcher
+    # indirection.
+    if ($stableLauncher) {
+        $commonStartArgs = "start-agent-background.ps1 -EnvFile `"$envFilePath`" -DataDir `"$DataDir`" -Port $Port -OpenUi"
+        $commonTrayArgs = "agent-tray.ps1 -EnvFile `"$envFilePath`" -DataDir `"$DataDir`" -Port $Port"
+        $commonStopArgs = "stop-agent.ps1 -Port $Port"
+        $startTarget = $stableLauncher
+        $trayTarget = $stableLauncher
+        $stopTarget = $stableLauncher
+    } else {
+        $commonStartArgs = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$startScript`" -EnvFile `"$envFilePath`" -DataDir `"$DataDir`" -Port $Port -OpenUi"
+        $commonTrayArgs = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$trayScript`" -EnvFile `"$envFilePath`" -DataDir `"$DataDir`" -Port $Port"
+        $commonStopArgs = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$stopScript`" -Port $Port"
+        $startTarget = ""
+        $trayTarget = ""
+        $stopTarget = ""
+    }
 
     New-AgentShortcut `
         -ShortcutPath (Join-Path $desktop "PrintAnywhere Agent.lnk") `
+        -TargetPath $startTarget `
         -Arguments $commonStartArgs `
         -Description "Start the Dhruvanta PrintAnywhere Agent and open the local UI."
     New-AgentShortcut `
         -ShortcutPath (Join-Path $desktop "PrintAnywhere Agent Tray.lnk") `
+        -TargetPath $trayTarget `
         -Arguments $commonTrayArgs `
         -Description "Show the Dhruvanta PrintAnywhere Agent tray controls."
     New-AgentShortcut `
         -ShortcutPath (Join-Path $startMenuDir "PrintAnywhere Agent.lnk") `
+        -TargetPath $startTarget `
         -Arguments $commonStartArgs `
         -Description "Start the Dhruvanta PrintAnywhere Agent and open the local UI."
     New-AgentShortcut `
         -ShortcutPath (Join-Path $startMenuDir "PrintAnywhere Agent Tray.lnk") `
+        -TargetPath $trayTarget `
         -Arguments $commonTrayArgs `
         -Description "Show the Dhruvanta PrintAnywhere Agent tray controls."
     New-AgentShortcut `
         -ShortcutPath (Join-Path $startMenuDir "Stop PrintAnywhere Agent.lnk") `
-        -Arguments "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$stopScript`" -Port $Port" `
+        -TargetPath $stopTarget `
+        -Arguments $commonStopArgs `
         -Description "Stop the local Dhruvanta PrintAnywhere Agent."
     New-AgentShortcut `
         -ShortcutPath (Join-Path $startMenuDir "Check for PrintAnywhere Agent Updates.lnk") `
@@ -471,12 +610,24 @@ if ($CreateShortcuts) {
 
 if ($StartTray) {
     Stop-ExistingTrayControllers
-    $trayScript = Join-Path $repoRoot "scripts\agent-tray.ps1"
-    Start-Process `
-        -FilePath "powershell.exe" `
-        -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", "`"$trayScript`"", "-EnvFile", "`"$envFilePath`"", "-DataDir", "`"$DataDir`"", "-Port", $Port) `
-        -WorkingDirectory $repoRoot `
-        -WindowStyle Hidden
+    # Phase 2a — launch via the stable launcher so the running tray
+    # is rooted at the same indirection the scheduled tasks /
+    # shortcuts use. Falls back to the version-pinned script when no
+    # launcher exists (non-managed install).
+    if ($stableLauncher) {
+        Start-Process `
+            -FilePath "cmd.exe" `
+            -ArgumentList @("/c", "`"$stableLauncher`"", "agent-tray.ps1", "-EnvFile", "`"$envFilePath`"", "-DataDir", "`"$DataDir`"", "-Port", $Port) `
+            -WorkingDirectory $repoRoot `
+            -WindowStyle Hidden
+    } else {
+        $trayScript = Join-Path $repoRoot "scripts\agent-tray.ps1"
+        Start-Process `
+            -FilePath "powershell.exe" `
+            -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", "`"$trayScript`"", "-EnvFile", "`"$envFilePath`"", "-DataDir", "`"$DataDir`"", "-Port", $Port) `
+            -WorkingDirectory $repoRoot `
+            -WindowStyle Hidden
+    }
 }
 
 Write-Host ""

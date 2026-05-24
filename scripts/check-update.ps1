@@ -369,6 +369,7 @@ function Invoke-SetupExecutable {
 
 function Start-InstalledAgentTasks {
     $taskNames = @("PrintAnywhereAgent", "PrintAnywhereAgent Tray")
+    $taskStarted = $false
     foreach ($taskName in $taskNames) {
         try {
             if (Get-Command Start-ScheduledTask -ErrorAction SilentlyContinue) {
@@ -385,8 +386,44 @@ function Start-InstalledAgentTasks {
                 }
             }
             Write-UpdateStep "Started refreshed scheduled task: $taskName."
+            $taskStarted = $true
         } catch {
             Write-UpdateStep "Could not start scheduled task '$taskName': $($_.Exception.Message)"
+        }
+    }
+
+    # Phase 2a — when neither scheduled task fires (operator installed
+    # without -RegisterStartupTask, or the install completed but the
+    # tasks were never registered), fall back to launching the agent +
+    # tray directly via the stable launcher. Without this, an update
+    # silently leaves the operator with no tray icon — exactly the
+    # reported "tray icon not resilient even when updating the
+    # version" symptom.
+    if (-not $taskStarted) {
+        Start-AgentViaStableLauncher
+    }
+}
+
+function Start-AgentViaStableLauncher {
+    if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+        Write-UpdateStep "LOCALAPPDATA is unset — cannot resolve the stable launcher."
+        return
+    }
+    $launcher = Join-Path $env:LOCALAPPDATA "Dhruvanta Systems\PrintAnywhereAgent\bin\agent-launcher.cmd"
+    if (-not (Test-Path $launcher)) {
+        Write-UpdateStep "Stable launcher not present at $launcher — update may have shipped before Phase 2a or installed non-managed."
+        return
+    }
+    foreach ($script in @("start-agent-background.ps1", "agent-tray.ps1")) {
+        try {
+            Start-Process `
+                -FilePath "cmd.exe" `
+                -ArgumentList @("/c", "`"$launcher`"", $script) `
+                -WindowStyle Hidden `
+                -ErrorAction Stop | Out-Null
+            Write-UpdateStep "Started $script via stable launcher."
+        } catch {
+            Write-UpdateStep "Could not start $script via stable launcher: $($_.Exception.Message)"
         }
     }
 }
