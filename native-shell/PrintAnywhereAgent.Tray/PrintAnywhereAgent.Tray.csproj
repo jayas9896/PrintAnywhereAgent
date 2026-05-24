@@ -1,0 +1,55 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Phase 2b — native Windows tray shell for PrintAnywhereAgent.
+
+    The Node Express agent (dist/index.js) keeps doing the HTTP +
+    printer + cloud work. This shell:
+      * is the visible Windows app the operator interacts with
+      * owns the tray icon (NotifyIcon)
+      * manages the Node sidecar process (start/restart/stop)
+      * survives version updates because the shell binary is a
+        stable file at $installRoot\PrintAnywhereAgent.exe, not a
+        version-pinned .ps1
+      * replaces the entire PowerShell tray + start-agent-background
+        pair once shipped end-to-end. The PS scripts stay in the
+        bundle for a release cycle as a fallback while operators
+        migrate.
+
+    Build (see scripts/build-native-tray.ps1 for the full command):
+      dotnet publish -c Release -r win-x64 (self-contained single-file)
+
+    Output: bin/Release/net8.0-windows/win-x64/publish/PrintAnywhereAgent.exe
+      (around 15 MB self-contained EXE; operator does not need
+      .NET pre-installed)
+  -->
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Dhruvanta.PrintAnywhere.AgentTray</RootNamespace>
+    <AssemblyName>PrintAnywhereAgent</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Version>0.1.0</Version>
+    <Company>Dhruvanta Systems</Company>
+    <Product>PrintAnywhere Agent</Product>
+    <Copyright>(c) Dhruvanta Systems</Copyright>
+    <Description>PrintAnywhere Agent — local Windows tray controller</Description>
+    <!-- Allows the project to compile from Linux / macOS CI by
+         pulling Microsoft.NET.Sdk.WindowsDesktop.Ref as a NuGet pack
+         instead of expecting the Windows-only Desktop SDK on the
+         build host. Real release artifacts still publish for win-x64. -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+
+  <!-- Single-file publish profile is set on the command line; defaults
+       here keep `dotnet build` cheap during development. -->
+  <PropertyGroup Condition=" '$(Configuration)' == 'Release' ">
+    <SelfContained>false</SelfContained>
+    <PublishTrimmed>false</PublishTrimmed>
+  </PropertyGroup>
+
+</Project>
