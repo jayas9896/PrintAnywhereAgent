@@ -2337,6 +2337,7 @@ function pageShell(
         { href: '/printers', label: 'Printers', id: 'printers' },
         { href: '/orders', label: 'Orders', id: 'orders' },
         { href: '/coupons', label: 'Coupons', id: 'coupons' },
+        { href: '/settings', label: 'Settings', id: 'settings' },
       ],
     },
     {
@@ -3998,7 +3999,16 @@ export async function startUiServer(runtime: AgentRuntime) {
         </form>
       </div>
 
-      ${renderBrandingCard(snapshot)}
+      <div class="card">
+        <div class="card-row">
+          <div class="card-title" style="margin-bottom:0;">Branding</div>
+          <a class="card-link" href="/settings">Open settings →</a>
+        </div>
+        <p class="muted small" style="margin-top:6px;">
+          Customer-facing logo and white-label settings now live on the dedicated
+          <a href="/settings">Settings page</a>.
+        </p>
+      </div>
 
       <div class="card">
         <div class="card-title">Registration &amp; approval</div>
@@ -4225,6 +4235,28 @@ export async function startUiServer(runtime: AgentRuntime) {
   // Lifts the configure-form card out of the Dashboard so first-time setup
   // has a clear destination from the left-nav. POST /configure still
   // handles persistence; this page just renders the form.
+  // ── Settings (branding + logo) ────────────────────────────────────────────
+  // Extracted from the Dashboard so the branding workflow has a clear
+  // destination from the left nav. POST handlers (/settings/branding,
+  // /settings/logo, /settings/logo/remove) are unchanged.
+  app.get('/settings', (request, response) => {
+    const snapshot = runtime.snapshot()
+    const notice = typeof request.query.notice === 'string' ? request.query.notice : null
+    const errorMessage = typeof request.query.error === 'string' ? request.query.error : null
+
+    const content = `
+      <div>
+        <div class="page-eyebrow">Operate</div>
+        <div class="page-title">Settings</div>
+        <p class="page-subtitle">Customer-facing branding and white-label settings for this machine.</p>
+      </div>
+      ${renderBrandingCard(snapshot)}
+    `
+    response.type('html').send(
+      pageShell({ title: 'Settings', activePage: 'settings', snapshot, notice, error: errorMessage }, content),
+    )
+  })
+
   // ── Staff login (Phase 1.5a) ─────────────────────────────────────────────
   // Operator signs into the local Agent UI as a PA staff user. Sessions
   // are local-only today (1.5a) — page gating + upstream-call use
