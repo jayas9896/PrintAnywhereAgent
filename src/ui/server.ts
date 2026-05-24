@@ -1044,10 +1044,75 @@ const SHARED_CSS = `
   .conn-pill-unregistered .conn-pill-dot { background: transparent; border: 2px solid currentColor; }
   @media (max-width: 560px) { .conn-pill-sync { display: none; } }
 
+  /* Legacy horizontal nav (kept for any embedded fragments not yet migrated). */
   .site-nav { background: var(--brand); border-top: 1px solid rgba(255,255,255,.08); padding: 0 24px; display: flex; gap: 0; flex-shrink: 0; }
   .site-nav a { color: rgba(255,255,255,.65); text-decoration: none; padding: 10px 16px; font-size: 13px; font-weight: 500; border-bottom: 2px solid transparent; transition: color .15s, border-color .15s; }
   .site-nav a:hover { color: rgba(255,255,255,.9); }
   .site-nav a.active { color: #fff; border-bottom-color: #7ed9a0; }
+
+  /* KAN-415 Agent Phase 1 — left-nav app shell.
+     - Two-column flex: fixed-width sidebar + flexible main column.
+     - Sidebar contains brand + per-section grouped nav + footer.
+     - Topbar holds the page title + connection pill.
+     - Collapses to a stacked layout below 900px. */
+  .app-shell { display: flex; min-height: 100vh; }
+  .app-sidebar {
+    width: 232px; background: var(--brand); color: #fff;
+    display: flex; flex-direction: column; gap: var(--space-3);
+    padding: 18px 14px 14px; flex-shrink: 0; position: sticky; top: 0;
+    max-height: 100vh; overflow-y: auto;
+  }
+  .app-sidebar-brand {
+    display: flex; align-items: center; gap: 10px; text-decoration: none;
+    padding: 4px 6px 12px; border-bottom: 1px solid rgba(255,255,255,.10);
+  }
+  .app-sidebar-brand img.dhruvanta-logo { height: 28px; width: auto; filter: brightness(0) invert(1); }
+  .app-sidebar-brand .brand-text { color: #fff; font-weight: 700; font-size: 15px; letter-spacing: .01em; display: block; }
+  .app-sidebar-brand .brand-sub { color: rgba(255,255,255,.55); font-size: 11px; display: block; }
+  .app-sidebar-nav { display: flex; flex-direction: column; gap: 12px; flex: 1; }
+  .app-sidebar-group { display: flex; flex-direction: column; gap: 2px; }
+  .app-sidebar-group-label {
+    color: rgba(255,255,255,.5); text-transform: uppercase; letter-spacing: .08em;
+    font-size: 11px; font-weight: 700; padding: 4px 10px 6px;
+  }
+  .app-sidebar-link {
+    color: rgba(255,255,255,.78); text-decoration: none;
+    padding: 8px 12px; border-radius: 8px; font-size: 14px; font-weight: 500;
+    transition: background .15s, color .15s;
+  }
+  .app-sidebar-link:hover { background: rgba(255,255,255,.08); color: #fff; }
+  .app-sidebar-link.is-active {
+    background: rgba(126,217,160,.18); color: #fff;
+    box-shadow: inset 3px 0 0 #7ed9a0;
+  }
+  .app-sidebar-footer {
+    display: flex; flex-direction: column; gap: 2px;
+    color: rgba(255,255,255,.45); font-size: 11px;
+    padding: 10px 10px 0; border-top: 1px solid rgba(255,255,255,.08);
+  }
+  .app-main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .app-topbar {
+    background: #fff; border-bottom: 1px solid var(--border);
+    padding: 12px 24px; display: flex; align-items: center; gap: 16px;
+    height: 58px; flex-shrink: 0;
+  }
+  .app-topbar-title { font-size: 16px; font-weight: 700; color: var(--text); }
+  .app-topbar-spacer { flex: 1; }
+  .app-topbar .conn-pill { background: rgba(45,122,79,.12); color: var(--brand); }
+  .app-topbar .conn-pill-connected { background: rgba(46,162,89,.16); color: #1e5f37; }
+  .app-topbar .conn-pill-stale { background: rgba(200,140,40,.16); color: #7a5316; }
+  .app-topbar .conn-pill-disconnected { background: rgba(200,60,50,.14); color: #862d22; }
+  .app-topbar .conn-pill-unregistered { background: rgba(0,0,0,.06); color: var(--text); }
+  @media (max-width: 900px) {
+    .app-shell { flex-direction: column; }
+    .app-sidebar { width: auto; position: static; max-height: none;
+      flex-direction: row; flex-wrap: wrap; padding: 12px; gap: 8px; }
+    .app-sidebar-brand { border-bottom: 0; padding: 0 6px; }
+    .app-sidebar-nav { flex-direction: row; flex-wrap: wrap; gap: 6px; width: 100%; }
+    .app-sidebar-group { flex-direction: row; flex-wrap: wrap; gap: 4px; }
+    .app-sidebar-group-label { padding: 0; align-self: center; }
+    .app-sidebar-footer { display: none; }
+  }
 
   /* Layout */
   .page-content { flex: 1; padding: var(--space-6); max-width: 1100px; width: 100%; margin: 0 auto; display: flex; flex-direction: column; gap: var(--space-5); }
@@ -2236,14 +2301,51 @@ function pageShell(
       `
       : ''
 
-  const navLinks = [
-    { href: '/', label: 'Dashboard', id: 'dashboard' },
-    { href: '/orders', label: 'Orders', id: 'orders' },
-    { href: '/coupons', label: 'Coupons', id: 'coupons' },
-    { href: '/help', label: 'Help', id: 'help' },
-    { href: '/support', label: 'Support', id: 'support' },
-    { href: '/about', label: 'About', id: 'about' },
+  // KAN-415 Agent Phase 1 — grouped left-nav. Each group has an
+  // explicit purpose so a first-time operator can find the right page
+  // without having to read every label first.
+  type NavGroup = { label: string; items: Array<{ href: string; label: string; id: string }> }
+  const navGroups: NavGroup[] = [
+    {
+      label: 'Get started',
+      items: [
+        { href: '/setup', label: 'Backend configuration', id: 'setup' },
+        { href: '/registration', label: 'Registration & approval', id: 'registration' },
+      ],
+    },
+    {
+      label: 'Operate',
+      items: [
+        { href: '/', label: 'Dashboard', id: 'dashboard' },
+        { href: '/orders', label: 'Orders', id: 'orders' },
+        { href: '/coupons', label: 'Coupons', id: 'coupons' },
+      ],
+    },
+    {
+      label: 'Resources',
+      items: [
+        { href: '/help', label: 'Help & FAQ', id: 'help' },
+        { href: '/support', label: 'Support', id: 'support' },
+        { href: '/about', label: 'About', id: 'about' },
+      ],
+    },
   ]
+
+  const navHtml = navGroups
+    .map(
+      (group) => `
+        <div class="app-sidebar-group" role="group" aria-label="${htmlEscape(group.label)}">
+          <div class="app-sidebar-group-label">${htmlEscape(group.label)}</div>
+          ${group.items
+            .map(
+              (link) =>
+                `<a class="app-sidebar-link${activePage === link.id ? ' is-active' : ''}" href="${link.href}"${activePage === link.id ? ' aria-current="page"' : ''}>${htmlEscape(link.label)}</a>`,
+            )
+            .join('')}
+        </div>
+      `,
+    )
+    .join('')
 
   return `<!doctype html>
 <html lang="en">
@@ -2254,34 +2356,37 @@ function pageShell(
   <style>${SHARED_CSS}</style>
 </head>
 <body>
-  <header class="site-header">
-    <a href="/" class="site-header-brand">
-      <img class="dhruvanta-logo" src="/assets/dhruvanta-symbol.svg" alt="Dhruvanta" />
-      <span>
-        <span class="brand-text">PrintAnywhere</span>
-        <span class="brand-sub">Agent</span>
-      </span>
-    </a>
-    ${bizBranding}
-    <span class="site-header-spacer"></span>
-    ${connectionPill(connection)}
-  </header>
-  <nav class="site-nav">
-    ${navLinks.map((link) => `<a href="${link.href}"${activePage === link.id ? ' class="active"' : ''}>${link.label}</a>`).join('')}
-  </nav>
-  <main class="page-content">
-    ${notice ? `<div class="alert alert-success" role="status" aria-live="polite">${htmlEscape(notice)}</div>` : ''}
-    ${error ? `<div class="alert alert-error" role="alert" aria-live="assertive">${htmlEscape(error)}</div>` : ''}
-    ${content}
-  </main>
-  <footer class="site-footer">
-    <span>PrintAnywhere Agent v${htmlEscape(AGENT_VERSION)} · &copy; Dhruvanta Systems</span>
-    <span>
-      <a href="/help">Help &amp; FAQ</a> &middot;
-      <a href="/support">Support</a> &middot;
-      <a href="/about">About</a>
-    </span>
-  </footer>
+  <div class="app-shell">
+    <aside class="app-sidebar" aria-label="PrintAnywhere Agent navigation">
+      <a href="/" class="app-sidebar-brand">
+        <img class="dhruvanta-logo" src="/assets/dhruvanta-symbol.svg" alt="Dhruvanta" />
+        <span>
+          <span class="brand-text">PrintAnywhere</span>
+          <span class="brand-sub">Agent</span>
+        </span>
+      </a>
+      ${bizBranding}
+      <nav class="app-sidebar-nav">
+        ${navHtml}
+      </nav>
+      <div class="app-sidebar-footer">
+        <span>v${htmlEscape(AGENT_VERSION)}</span>
+        <span>&copy; Dhruvanta Systems</span>
+      </div>
+    </aside>
+    <div class="app-main">
+      <header class="app-topbar">
+        <div class="app-topbar-title">${htmlEscape(title)}</div>
+        <span class="app-topbar-spacer"></span>
+        ${connectionPill(connection)}
+      </header>
+      <main class="page-content">
+        ${notice ? `<div class="alert alert-success" role="status" aria-live="polite">${htmlEscape(notice)}</div>` : ''}
+        ${error ? `<div class="alert alert-error" role="alert" aria-live="assertive">${htmlEscape(error)}</div>` : ''}
+        ${content}
+      </main>
+    </div>
+  </div>
   ${SHARED_SCRIPTS}
 </body>
 </html>`
@@ -4028,6 +4133,110 @@ export async function startUiServer(runtime: AgentRuntime) {
     `
 
     response.type('html').send(pageShell({ title: 'Dashboard', activePage: 'dashboard', snapshot, notice, error: errorMessage }, content))
+  })
+
+  // ── Setup (Backend configuration) ─────────────────────────────────────────
+  // KAN-415 Agent Phase 1 — dedicated page for backend URL + shop details.
+  // Lifts the configure-form card out of the Dashboard so first-time setup
+  // has a clear destination from the left-nav. POST /configure still
+  // handles persistence; this page just renders the form.
+  app.get('/setup', (request, response) => {
+    const snapshot = runtime.snapshot()
+    const notice = typeof request.query.notice === 'string' ? request.query.notice : null
+    const errorMessage = typeof request.query.error === 'string' ? request.query.error : null
+    const configuredServerUrl = snapshot.serverUrl ?? defaultPrintAnywhereBackendUrl()
+    const isRegistered = !!snapshot.registration?.agentId
+
+    const content = `
+      <div>
+        <div class="page-eyebrow">Get started</div>
+        <div class="page-title">Backend configuration</div>
+        <p class="page-subtitle">Point this PC at the PrintAnywhere backend and give it a friendly name so the platform admin can recognise it.</p>
+      </div>
+      <div class="card">
+        ${renderConfigureForm(snapshot, configuredServerUrl)}
+      </div>
+      ${
+        isRegistered
+          ? `<div class="card">
+              <div class="card-title">Next step</div>
+              <p>This PC is already registered with the backend. Head to <a href="/registration">Registration &amp; approval</a> to see your approval status, or to <a href="/">Dashboard</a> for live operations.</p>
+            </div>`
+          : `<div class="card">
+              <div class="card-title">Next step</div>
+              <p>Once you save your shop details, the agent will register itself with the backend and produce a pairing code. Open <a href="/registration">Registration &amp; approval</a> to complete pairing.</p>
+            </div>`
+      }
+    `
+    response.type('html').send(
+      pageShell({ title: 'Backend configuration', activePage: 'setup', snapshot, notice, error: errorMessage }, content),
+    )
+  })
+
+  // ── Registration & approval ───────────────────────────────────────────────
+  // KAN-415 Agent Phase 1 — dedicated page that surfaces the pairing
+  // QR/code and the current approval lifecycle (pending / approved /
+  // suspended / revoked). The dashboard kept showing this material
+  // alongside ops cards which was visually noisy for a first-run owner.
+  app.get('/registration', (request, response) => {
+    const snapshot = runtime.snapshot()
+    const notice = typeof request.query.notice === 'string' ? request.query.notice : null
+    const errorMessage = typeof request.query.error === 'string' ? request.query.error : null
+    const configuredServerUrl = snapshot.serverUrl ?? defaultPrintAnywhereBackendUrl()
+    const profile = snapshot.profile
+    const lifecycleBanner = selectLifecycleBanner(profile)
+    const isConfigured = !!snapshot.serverUrl
+    const isPaired = !!snapshot.registration?.agentId
+
+    const lifecycleHtml = lifecycleBanner
+      ? `<div id="lifecycle-banner">${stateBanner({
+          variant: lifecycleBanner.variant,
+          title: lifecycleBanner.title,
+          body: lifecycleBanner.body,
+        })}</div>`
+      : ''
+
+    let body: string
+    if (!isConfigured) {
+      body = `
+        <div class="card">
+          <div class="card-title">Configure the backend first</div>
+          <p>Before this PC can pair with the platform, set the PrintAnywhere server address and your shop name. Open <a href="/setup">Backend configuration</a>.</p>
+        </div>`
+    } else if (!isPaired) {
+      body = `
+        ${lifecycleHtml}
+        ${renderPairingHero({
+          pairingCode: snapshot.registration?.pairingCode ?? null,
+          pairingCodeExpiresAt: snapshot.registration?.pairingCodeExpiresAt ?? null,
+        })}
+        ${renderTrustPanel()}`
+    } else {
+      body = `
+        ${lifecycleHtml}
+        <div class="card">
+          <div class="card-title">Pairing details</div>
+          <ul class="kv">
+            <li><span>Status</span><strong>${htmlEscape(profile?.approvalStatus ?? 'unknown')}</strong></li>
+            <li><span>Agent ID</span><strong>${htmlEscape(snapshot.registration?.agentId ?? '—')}</strong></li>
+            <li><span>Backend URL</span><strong>${htmlEscape(configuredServerUrl)}</strong></li>
+            ${profile?.approvedAt ? `<li><span>Approved</span><strong>${htmlEscape(profile.approvedAt)}</strong></li>` : ''}
+          </ul>
+          <p style="margin-top:12px">If your platform admin needs to re-pair this PC, contact <a href="/support">Support</a>.</p>
+        </div>`
+    }
+
+    const content = `
+      <div>
+        <div class="page-eyebrow">Get started</div>
+        <div class="page-title">Registration &amp; approval</div>
+        <p class="page-subtitle">Pair this PC with the platform admin and track your shop's approval status.</p>
+      </div>
+      ${body}
+    `
+    response.type('html').send(
+      pageShell({ title: 'Registration & approval', activePage: 'registration', snapshot, notice, error: errorMessage }, content),
+    )
   })
 
   // ── Orders ────────────────────────────────────────────────────────────────
