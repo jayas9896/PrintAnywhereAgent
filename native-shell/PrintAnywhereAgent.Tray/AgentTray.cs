@@ -167,29 +167,24 @@ public sealed class AgentTray : IDisposable
 
     private void OpenUpdateWindow(bool install)
     {
-        // Delegate to the existing PS update script — it owns the
-        // GitHub release lookup + signed-checksum verify. Native
-        // updater is a follow-up (Phase 2d).
-        string scriptPath = Path.Combine(_layout.VersionDirectory, "scripts", "check-update.ps1");
-        if (!File.Exists(scriptPath))
+        // Phase 2d — native updater. Replaces the WinForms-in-PS
+        // dialog scripts/check-update.ps1 spawned. The PS script
+        // stays in the release bundle for one cycle so an operator
+        // who upgrades from a pre-2d install can still hit it from
+        // the legacy Start Menu shortcut while the native tray
+        // takes over.
+        try
         {
-            _notifyIcon.ShowBalloonTip(4000, "PrintAnywhere Agent",
-                "Update script not found in this install. Reinstall to repair.", ToolTipIcon.Error);
-            return;
+            string? raw = System.Reflection.Assembly.GetExecutingAssembly()
+                .GetName().Version?.ToString(3);
+            Version version = !string.IsNullOrWhiteSpace(raw) && Version.TryParse(raw, out var parsed)
+                ? parsed : new Version(0, 0, 0);
+            var service = new UpdateService(version);
+            var window = new UpdateWindow(service, _sidecar, install);
+            window.FormClosed += (_, _) => service.Dispose();
+            window.Show();
+            window.Activate();
         }
-        var args = new System.Collections.Generic.List<string>
-        {
-            "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-File", scriptPath,
-        };
-        if (install) args.Add("-Install");
-        var psi = new ProcessStartInfo
-        {
-            FileName = "powershell.exe",
-            UseShellExecute = false,
-            WorkingDirectory = _layout.VersionDirectory,
-        };
-        foreach (var a in args) psi.ArgumentList.Add(a);
-        try { Process.Start(psi); }
         catch (Exception ex)
         {
             _notifyIcon.ShowBalloonTip(4000, "PrintAnywhere Agent",

@@ -33,10 +33,35 @@ than `.ps1` scripts in the Start Menu.
 
 ## What it does NOT do yet
 
-- No native auto-updater (defer to Phase 2d).
 - No code signing (the EXE + MSI will SmartScreen-warn until a real
   EV cert is purchased and wired into the build scripts).
 - No WebView2 embed — "Open UI" still opens the system browser.
+
+## Native auto-updater (Phase 2d)
+
+`UpdateService.cs` + `UpdateWindow.cs` are the C# replacement for
+`scripts/check-update.ps1`. Same operator-visible flow ("Checking…
+→ Update available / Up to date → Install → progress → done") but
+driven by native `HttpClient` + `SHA256.HashData` rather than
+PowerShell + `Invoke-RestMethod`. The tray's "Check for Updates"
+and "Install Latest Update" menu items launch this dialog directly
+— the PS script stays in the release bundle one cycle as fallback
+for operators upgrading from a pre-2d install.
+
+Behaviour:
+
+* `GET https://api.github.com/repos/Jayashanker-Padishala/PrintAnywhereAgent/releases/latest`
+* Prefers a `.msi` asset (Phase 2c output); falls back to the legacy
+  `*-setup.exe` until `release.yml` is updated to publish MSIs
+* Downloads setup + `SHA256SUMS.txt` to a fresh `%TEMP%` dir
+* Verifies SHA-256 against the matching `SHA256SUMS.txt` line
+* Stops the Node sidecar (`NodeSidecar.Stop()`)
+* Runs the installer silently:
+  * MSI → `msiexec /i ... /quiet /norestart`
+  * EXE → `<setup>.exe /quiet /nolaunch` (legacy)
+* Restarts the sidecar
+* All cancellable mid-download via a `CancellationTokenSource` the
+  form holds; closing the window aborts in-flight work
 
 ## MSI installer (Phase 2c)
 
