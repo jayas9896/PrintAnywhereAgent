@@ -66,16 +66,22 @@ jobs:
         run: node scripts/build-native-tray.mjs
 
       - name: Stage MSI payload
-        # The MSI HarvestDirectory consumes everything in payload/ as
-        # the install content. For now we drop in just the native EXE
-        # so the MSI scaffolding is real-Windows verified; subsequent
-        # iterations will stage the full release bundle (dist/,
-        # node-win-x64/, scripts/) into this dir before the MSI build.
+        # For the standalone native-shell gate we only stage the
+        # native EXE — that is enough to prove the wix authoring is
+        # correct end-to-end. The release.yml flow stages the FULL
+        # release bundle from the upstream release job's artifact.
         shell: pwsh
         run: |
           $payload = "native-shell/PrintAnywhereAgent.Installer/payload"
           New-Item -ItemType Directory -Force -Path $payload | Out-Null
           Copy-Item artifacts/native-shell/PrintAnywhereAgent.exe $payload/ -Force
+
+      - name: Harvest MSI payload into Harvested.wxs
+        shell: pwsh
+        run: |
+          $payload = (Resolve-Path "native-shell/PrintAnywhereAgent.Installer/payload").Path
+          $harvested = Join-Path (Resolve-Path "native-shell/PrintAnywhereAgent.Installer").Path "Harvested.wxs"
+          node scripts/harvest-msi-payload.mjs --payload $payload --output $harvested
 
       - name: Build MSI
         shell: pwsh

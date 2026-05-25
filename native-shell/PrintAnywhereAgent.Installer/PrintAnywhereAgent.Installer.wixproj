@@ -42,12 +42,12 @@
     </DefineConstants>
   </PropertyGroup>
 
-  <!-- PayloadSource is already injected into DefineConstants above,
-       so Product.wxs can reference files at
-       $(var.PayloadSource)\<filename>. Full directory harvest
-       (every file under PayloadSource auto-componentised) is the
-       Phase 2c follow-up — for now we explicitly add only the
-       PrintAnywhereAgent.exe the tray needs to launch. -->
+  <!-- PayloadSource is injected into DefineConstants above so both
+       Product.wxs and the generated Harvested.wxs can reference
+       files via $(var.PayloadSource). Harvested.wxs is produced
+       BEFORE wix compile by scripts/harvest-msi-payload.mjs; it
+       holds the ComponentGroup PayloadComponents wiring every file
+       in the staged bundle. -->
 
   <!-- WixToolset.Util.wixext for ARP polish.
        WixToolset.UI.wixext for the standard install wizard so the

@@ -107,6 +107,13 @@ jobs:
           Copy-Item artifacts/native-shell/PrintAnywhereAgent.exe `
             native-shell/PrintAnywhereAgent.Installer/payload/ -Force
 
+      - name: Harvest MSI payload into Harvested.wxs
+        shell: pwsh
+        run: |
+          $payload = (Resolve-Path "native-shell/PrintAnywhereAgent.Installer/payload").Path
+          $harvested = Join-Path (Resolve-Path "native-shell/PrintAnywhereAgent.Installer").Path "Harvested.wxs"
+          node scripts/harvest-msi-payload.mjs --payload $payload --output $harvested
+
       - name: Build MSI
         shell: pwsh
         run: |

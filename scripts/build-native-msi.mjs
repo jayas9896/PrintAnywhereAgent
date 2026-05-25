@@ -49,7 +49,20 @@ if (!existsSync(stagedExe)) {
 copyFileSync(stagedExe, join(payload, 'PrintAnywhereAgent.exe'))
 console.error(`build-native-msi: payload staged at ${payload}`)
 
-// 3) Build the MSI.
+// 3) Harvest the payload into Harvested.wxs (auto-generated
+//    ComponentGroup referenced by Product.wxs).
+const harvested = join(repoRoot, 'native-shell', 'PrintAnywhereAgent.Installer', 'Harvested.wxs')
+const harvestResult = spawnSync(process.execPath, [
+  join(__dirname, 'harvest-msi-payload.mjs'),
+  '--payload', payload,
+  '--output', harvested,
+], { stdio: 'inherit', cwd: repoRoot })
+if (harvestResult.status !== 0) {
+  console.error('build-native-msi: harvest step failed')
+  process.exit(harvestResult.status ?? 1)
+}
+
+// 4) Build the MSI.
 const dotnet = resolveDotnet()
 const wixproj = join(repoRoot, 'native-shell', 'PrintAnywhereAgent.Installer', 'PrintAnywhereAgent.Installer.wixproj')
 const msiResult = spawnSync(dotnet, [
