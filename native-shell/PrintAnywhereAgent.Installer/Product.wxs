@@ -84,11 +84,11 @@
       </Component>
     </DirectoryRef>
 
-    <!-- ARP (Add/Remove Programs) polish so the entry is recognisable. -->
+    <!-- ARP (Add/Remove Programs) polish. NOTE: ARPNOREPAIR /
+         ARPNOMODIFY are set by WixUI_Minimal already; defining them
+         here too triggers WIX duplicate-property errors. -->
     <Property Id="ARPCONTACT" Value="support@dhruvantasystems.com" />
     <Property Id="ARPHELPLINK" Value="https://printanywhere.dhruvantasystems.com/" />
-    <Property Id="ARPNOREPAIR" Value="1" />
-    <Property Id="ARPNOMODIFY" Value="1" />
 
     <Feature Id="MainFeature"
              Title="PrintAnywhere Agent"
