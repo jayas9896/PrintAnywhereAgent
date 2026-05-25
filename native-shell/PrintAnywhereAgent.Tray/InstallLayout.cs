@@ -39,12 +39,36 @@ public sealed record InstallLayout(string InstallRoot, string VersionDirectory, 
             throw new DirectoryNotFoundException($"No printanywhere-agent-v* version directory under {installRoot}. The release bundle may not be extracted yet.");
         }
 
-        // Bundled Node runtime — release:build vendors win-x64 node.
-        string nodeExe = Path.Combine(versionDir, "node-win-x64", "node.exe");
-        if (!File.Exists(nodeExe))
+        // Bundled Node runtime — release:build (scripts/build-release.mjs)
+        // vendors win-x64 node under <version>/runtime/node-win-x64/.
+        // The legacy <version>/node-win-x64/ layout (no `runtime/`
+        // parent) is checked as a fallback for any old bundle still in
+        // the wild. If neither exists we throw rather than silently
+        // falling through to a PATH `node.exe`: on a client PC with no
+        // Node installed (the v0.1.33 install failure mode) the PATH
+        // fallback made Process.Start in NodeSidecar throw an
+        // UNHANDLED Win32Exception that killed the tray before the
+        // icon painted. Every dev / CI test PC has Node, so the path
+        // mismatch was invisible until the first real client install.
+        string runtimeNodeExe = Path.Combine(versionDir, "runtime", "node-win-x64", "node.exe");
+        string legacyNodeExe = Path.Combine(versionDir, "node-win-x64", "node.exe");
+        string nodeExe;
+        if (File.Exists(runtimeNodeExe))
         {
-            // Fall back to PATH node, same way the PS scripts do.
-            nodeExe = "node.exe";
+            nodeExe = runtimeNodeExe;
+        }
+        else if (File.Exists(legacyNodeExe))
+        {
+            nodeExe = legacyNodeExe;
+        }
+        else
+        {
+            throw new FileNotFoundException(
+                "Bundled Node runtime not found. Looked at:\n"
+                + "  " + runtimeNodeExe + "\n"
+                + "  " + legacyNodeExe + "\n"
+                + "The release bundle is incomplete — reinstall from the latest MSI.",
+                runtimeNodeExe);
         }
 
         string agentEntry = Path.Combine(versionDir, "dist", "index.js");

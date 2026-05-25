@@ -140,7 +140,32 @@ public sealed class NodeSidecar : IDisposable
 
         var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
         process.Exited += (_, _) => OnProcessExited(process, cancel);
-        process.Start();
+        try
+        {
+            process.Start();
+        }
+        catch (System.ComponentModel.Win32Exception ex)
+        {
+            // The v0.1.33 client install failure mode: NodeExecutable
+            // resolved to a path that doesn't exist on disk (bundle
+            // layout drift) so Process.Start throws Win32Exception 2.
+            // Without this catch the exception unwound past Program.Main
+            // and the tray died silently — operator saw "click does
+            // nothing", Event Log saw "unhandled exception", but no
+            // user-facing diagnosis. Surface it loudly with the actual
+            // command line so the next layout drift is self-explaining.
+            string detail = "Node sidecar failed to start:\n\n"
+                + "Executable: " + _layout.NodeExecutable + "\n"
+                + "Entry:      " + _layout.AgentEntryPoint + "\n"
+                + "WorkingDir: " + _layout.VersionDirectory + "\n\n"
+                + ex.Message + " (Win32 error " + ex.NativeErrorCode + ")";
+            System.Windows.Forms.MessageBox.Show(
+                detail,
+                "PrintAnywhere Agent - sidecar start failed",
+                System.Windows.Forms.MessageBoxButtons.OK,
+                System.Windows.Forms.MessageBoxIcon.Error);
+            throw;
+        }
         _process = process;
     }
 

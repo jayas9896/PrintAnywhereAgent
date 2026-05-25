@@ -33,7 +33,7 @@
     <RootNamespace>Dhruvanta.PrintAnywhere.AgentTray</RootNamespace>
     <AssemblyName>PrintAnywhereAgent</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>0.1.33</Version>
+    <Version>0.1.34</Version>
     <Company>Dhruvanta Systems</Company>
     <Product>PrintAnywhere Agent</Product>
     <Copyright>(c) Dhruvanta Systems</Copyright>
