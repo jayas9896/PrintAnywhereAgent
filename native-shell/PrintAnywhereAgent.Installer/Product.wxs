@@ -75,6 +75,9 @@
               <RemoveFolder Id="RemoveProductDir"
                             Directory="ProductDir"
                             On="uninstall" />
+              <RemoveFolder Id="RemoveManufacturerDir"
+                            Directory="ManufacturerDir"
+                            On="uninstall" />
             </Component>
           </Directory>
         </Directory>
