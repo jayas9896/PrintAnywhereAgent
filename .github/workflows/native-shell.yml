@@ -61,6 +61,13 @@ jobs:
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           Write-Host "PrintAnywhere Agent version: $version"
 
+      - name: Run native-shell tests
+        # KAN-425 regression fence — InstallLayoutTests catches the
+        # bundle-path drift that broke the v0.1.33 client install.
+        # Runs BEFORE the EXE build so a regression fails fast.
+        shell: pwsh
+        run: dotnet test native-shell/PrintAnywhereAgent.Tray.Tests/PrintAnywhereAgent.Tray.Tests.csproj -c Release
+
       - name: Build native tray EXE
         shell: pwsh
         run: node scripts/build-native-tray.mjs

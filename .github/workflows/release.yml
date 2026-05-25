@@ -97,6 +97,13 @@ jobs:
           name: printanywhere-agent-bundle
           path: native-shell/PrintAnywhereAgent.Installer/payload
 
+      - name: Run native-shell tests
+        # KAN-425 — InstallLayoutTests regression fence. Fails the
+        # release before the MSI is uploaded if the bundle-path
+        # contract drifts again.
+        shell: pwsh
+        run: dotnet test native-shell/PrintAnywhereAgent.Tray.Tests/PrintAnywhereAgent.Tray.Tests.csproj -c Release
+
       - name: Build native tray EXE
         shell: pwsh
         run: node scripts/build-native-tray.mjs

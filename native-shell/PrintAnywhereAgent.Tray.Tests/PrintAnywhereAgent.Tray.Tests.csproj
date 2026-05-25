@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    KAN-425 — regression-fence test project for the native tray.
+
+    Initially scoped to InstallLayout (the path-drift bug that shipped
+    to a v0.1.33 client install). The Tray's other classes can be added
+    as their respective bugs surface.
+
+    Targets net8.0-windows because InstallLayout reads
+    Environment.SpecialFolder.LocalApplicationData which is Windows-
+    specific. Runs in the same windows-latest GitHub Actions job that
+    already builds the EXE + MSI (see .github/workflows/native-shell.yml).
+
+    EnableWindowsTargeting=true lets Linux dotnet pull the
+    WindowsDesktop reference assemblies as a NuGet pack, mirroring the
+    same setting on PrintAnywhereAgent.Tray.csproj. Local Linux build
+    succeeds; tests only execute on Windows.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Dhruvanta.PrintAnywhere.AgentTray.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.0" />
+    <PackageReference Include="xunit" Version="2.9.0" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PrintAnywhereAgent.Tray\PrintAnywhereAgent.Tray.csproj" />
+  </ItemGroup>
+
+</Project>
