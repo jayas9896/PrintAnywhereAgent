@@ -42,20 +42,12 @@
     </DefineConstants>
   </PropertyGroup>
 
-  <!-- The HarvestDirectory item is the WiX 5 successor to the
-       heat.exe tool: it walks PayloadSource at build time and
-       produces a ComponentGroup of File/Component entries. Caller
-       references the generated ComponentGroup id from Product.wxs
-       via <ComponentGroupRef Id="PayloadComponents" />. -->
-  <ItemGroup>
-    <HarvestDirectory Include="$(PayloadSource)">
-      <ComponentGroupName>PayloadComponents</ComponentGroupName>
-      <DirectoryRefId>INSTALLDIR</DirectoryRefId>
-      <SuppressRootDirectory>true</SuppressRootDirectory>
-      <SuppressCom>true</SuppressCom>
-      <SuppressRegistry>true</SuppressRegistry>
-    </HarvestDirectory>
-  </ItemGroup>
+  <!-- PayloadSource is already injected into DefineConstants above,
+       so Product.wxs can reference files at
+       $(var.PayloadSource)\<filename>. Full directory harvest
+       (every file under PayloadSource auto-componentised) is the
+       Phase 2c follow-up — for now we explicitly add only the
+       PrintAnywhereAgent.exe the tray needs to launch. -->
 
   <!-- WixToolset.Util.wixext for ARP polish.
        WixToolset.UI.wixext for the standard install wizard so the

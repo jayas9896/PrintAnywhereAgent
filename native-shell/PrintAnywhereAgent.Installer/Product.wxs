@@ -41,8 +41,17 @@
       <Directory Id="ManufacturerDir" Name="Dhruvanta Systems">
         <Directory Id="ProductDir" Name="PrintAnywhereAgent">
           <Directory Id="INSTALLDIR" Name="printanywhere-agent-v$(PrintAnywhereAgentVersion)">
-            <!-- HarvestDirectory in the wixproj fills this dir at
-                 build time via ComponentGroupRef below. -->
+            <!-- Phase 2c first cut: only the native tray EXE is
+                 explicitly included. The full release-bundle harvest
+                 (dist/, node-win-x64/, scripts/, assets/, config/)
+                 is the next follow-up — once it lands operators can
+                 install everything from the MSI instead of zip +
+                 install-release.ps1. -->
+            <Component Id="PrintAnywhereAgentExeComponent" Guid="*">
+              <File Id="PrintAnywhereAgentExe"
+                    Source="$(var.PayloadSource)\PrintAnywhereAgent.exe"
+                    KeyPath="yes" />
+            </Component>
           </Directory>
         </Directory>
       </Directory>
@@ -81,8 +90,6 @@
     <Property Id="ARPNOREPAIR" Value="1" />
     <Property Id="ARPNOMODIFY" Value="1" />
 
-    <!-- The harvested ComponentGroup wires up every file in
-         PayloadSource as a component under INSTALLDIR. -->
     <Feature Id="MainFeature"
              Title="PrintAnywhere Agent"
              Level="1"
@@ -90,7 +97,7 @@
              AllowAdvertise="no"
              InstallDefault="local"
              AllowAbsent="no">
-      <ComponentGroupRef Id="PayloadComponents" />
+      <ComponentRef Id="PrintAnywhereAgentExeComponent" />
       <ComponentRef Id="ApplicationShortcuts" />
     </Feature>
 
