@@ -47,7 +47,13 @@
                  is the next follow-up - once it lands operators can
                  install everything from the MSI instead of zip +
                  install-release.ps1. -->
-            <Component Id="PrintAnywhereAgentExeComponent" Guid="*">
+            <!-- Explicit GUID required: WiX refuses Guid="*" when a
+                 component carries both a file and a registry value
+                 (auto-GUID only works with at most one of each).
+                 Pinned GUID stays stable across versions so uninstall
+                 reference counting tracks correctly. -->
+            <Component Id="PrintAnywhereAgentExeComponent"
+                       Guid="6A0F4C2B-7D5E-4A2C-9E11-3F8A1D7B5C44">
               <!-- ICE38: per-user components must use HKCU registry
                    value as KeyPath, not a file. The file still
                    installs; the registry value anchors MSI engine
