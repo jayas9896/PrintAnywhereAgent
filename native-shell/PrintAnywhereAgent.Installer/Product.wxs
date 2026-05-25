@@ -3,13 +3,13 @@
      xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
 
   <!--
-    Phase 2c — PrintAnywhereAgent MSI authoring.
+    Phase 2c -- PrintAnywhereAgent MSI authoring.
 
     UpgradeCode is the stable GUID that identifies the product
     across versions. Generated once; NEVER changed. A new
     UpgradeCode means Windows treats the new MSI as a different
     product (won't replace the old install, won't show as upgrade
-    in Add/Remove Programs) — operators would end up with two
+    in Add/Remove Programs) -- operators would end up with two
     PrintAnywhere Agent entries.
   -->
   <Package
@@ -33,7 +33,7 @@
          one file to download. -->
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
-    <!-- Per-user install layout — mirrors the existing
+    <!-- Per-user install layout -- mirrors the existing
          %LOCALAPPDATA%\Dhruvanta Systems\PrintAnywhereAgent\
          printanywhere-agent-vX.Y.Z\ convention so the native
          tray's InstallLayout.Discover() finds it. -->
@@ -44,7 +44,7 @@
             <!-- Phase 2c first cut: only the native tray EXE is
                  explicitly included. The full release-bundle harvest
                  (dist/, node-win-x64/, scripts/, assets/, config/)
-                 is the next follow-up — once it lands operators can
+                 is the next follow-up -- once it lands operators can
                  install everything from the MSI instead of zip +
                  install-release.ps1. -->
             <Component Id="PrintAnywhereAgentExeComponent" Guid="*">
@@ -102,7 +102,7 @@
     </Feature>
 
     <!-- WixUI_Minimal wizard: License → "Install" → Finish. No
-         install-directory picker — this is a per-user MSI pinned to
+         install-directory picker -- this is a per-user MSI pinned to
          %LOCALAPPDATA%, the operator can't choose. License text
          comes from License.rtf next to this wxs. -->
     <ui:WixUI Id="WixUI_Minimal" />
