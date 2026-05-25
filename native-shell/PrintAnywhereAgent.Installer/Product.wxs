@@ -48,9 +48,27 @@
                  install everything from the MSI instead of zip +
                  install-release.ps1. -->
             <Component Id="PrintAnywhereAgentExeComponent" Guid="*">
+              <!-- ICE38: per-user components must use HKCU registry
+                   value as KeyPath, not a file. The file still
+                   installs; the registry value anchors MSI engine
+                   reference counting on uninstall. -->
+              <RegistryValue Root="HKCU"
+                             Key="Software\Dhruvanta Systems\PrintAnywhereAgent"
+                             Name="AgentExeInstalled"
+                             Type="integer"
+                             Value="1"
+                             KeyPath="yes" />
               <File Id="PrintAnywhereAgentExe"
-                    Source="$(var.PayloadSource)\PrintAnywhereAgent.exe"
-                    KeyPath="yes" />
+                    Source="$(var.PayloadSource)\PrintAnywhereAgent.exe" />
+              <!-- ICE64: per-user directories need a RemoveFolder so
+                   uninstall removes the dirs in %LOCALAPPDATA%
+                   instead of leaving empty husks. -->
+              <RemoveFolder Id="RemoveInstallDir"
+                            Directory="INSTALLDIR"
+                            On="uninstall" />
+              <RemoveFolder Id="RemoveProductDir"
+                            Directory="ProductDir"
+                            On="uninstall" />
             </Component>
           </Directory>
         </Directory>
