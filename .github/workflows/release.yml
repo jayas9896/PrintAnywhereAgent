@@ -48,3 +48,86 @@ jobs:
             "artifacts/SHA256SUMS.txt" \
             --title "PrintAnywhere Agent ${{ github.ref_name }}" \
             --generate-notes
+
+      # Phase 2c follow-up — hand the staged bundle to the
+      # downstream windows-installer job so it can package the same
+      # bytes into an MSI without rebuilding from scratch.
+      - name: Upload staged bundle for MSI job
+        uses: actions/upload-artifact@v4
+        with:
+          name: printanywhere-agent-bundle
+          path: artifacts/printanywhere-agent-v${{ steps.version.outputs.version }}
+          if-no-files-found: error
+          retention-days: 1
+
+  # Phase 2c — separate Windows job that builds the native EXE +
+  # MSI from the same tag and uploads the MSI as an additional
+  # release asset. Operators eventually pick the MSI over the
+  # legacy zip + install-release.ps1 workflow.
+  windows-installer:
+    needs: release
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Resolve version
+        id: version
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Download staged bundle from release job
+        uses: actions/download-artifact@v4
+        with:
+          name: printanywhere-agent-bundle
+          path: native-shell/PrintAnywhereAgent.Installer/payload
+
+      - name: Build native tray EXE
+        shell: pwsh
+        run: node scripts/build-native-tray.mjs
+
+      - name: Stage native EXE into MSI payload
+        shell: pwsh
+        run: |
+          Copy-Item artifacts/native-shell/PrintAnywhereAgent.exe `
+            native-shell/PrintAnywhereAgent.Installer/payload/ -Force
+
+      - name: Build MSI
+        shell: pwsh
+        run: |
+          $payload = (Resolve-Path "native-shell/PrintAnywhereAgent.Installer/payload").Path
+          dotnet build native-shell/PrintAnywhereAgent.Installer/PrintAnywhereAgent.Installer.wixproj `
+            -c Release `
+            -p:PrintAnywhereAgentVersion=${{ steps.version.outputs.version }} `
+            -p:PayloadSource=$payload
+
+      - name: Locate MSI artifact
+        id: msi
+        shell: pwsh
+        run: |
+          $msi = Get-ChildItem native-shell/PrintAnywhereAgent.Installer/bin/Release -Filter "PrintAnywhereAgent-${{ steps.version.outputs.version }}.msi" -Recurse | Select-Object -First 1
+          if (-not $msi) { throw "MSI was not produced" }
+          "path=$($msi.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "MSI: $($msi.FullName) ($([math]::Round($msi.Length / 1MB, 1)) MB)"
+
+      - name: Upload MSI to the GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ github.ref_name }}" "${{ steps.msi.outputs.path }}" --clobber

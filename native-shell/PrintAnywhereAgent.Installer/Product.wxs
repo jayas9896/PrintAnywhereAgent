@@ -1,4 +1,5 @@
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui"
      xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
 
   <!--
@@ -93,11 +94,12 @@
       <ComponentRef Id="ApplicationShortcuts" />
     </Feature>
 
-    <!-- Phase 2c-follow-up: switch to WixUI_InstallDir wizard once
-         the WixToolset.UI.wixext namespace mapping is wired up.
-         Silent install for now — operator double-clicks the MSI,
-         install runs without UI, tray appears in the notification
-         area when the agent finishes registering. -->
+    <!-- WixUI_Minimal wizard: License → "Install" → Finish. No
+         install-directory picker — this is a per-user MSI pinned to
+         %LOCALAPPDATA%, the operator can't choose. License text
+         comes from License.rtf next to this wxs. -->
+    <ui:WixUI Id="WixUI_Minimal" />
+    <WixVariable Id="WixUILicenseRtf" Value="License.rtf" />
 
   </Package>
 </Wix>

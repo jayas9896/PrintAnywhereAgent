@@ -57,11 +57,12 @@
     </HarvestDirectory>
   </ItemGroup>
 
-  <!-- WixToolset.Util.wixext for ARP polish + future custom actions.
-       The WixToolset.UI.wixext (install wizard) is a follow-up; the
-       current MSI installs silently. -->
+  <!-- WixToolset.Util.wixext for ARP polish.
+       WixToolset.UI.wixext for the standard install wizard so the
+       operator sees a real dialog instead of a silent MSI. -->
   <ItemGroup>
     <PackageReference Include="WixToolset.Util.wixext" Version="5.0.2" />
+    <PackageReference Include="WixToolset.UI.wixext" Version="5.0.2" />
   </ItemGroup>
 
 </Project>
