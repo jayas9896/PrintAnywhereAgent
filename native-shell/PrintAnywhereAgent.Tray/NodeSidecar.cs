@@ -268,35 +268,54 @@ public sealed class NodeSidecar : IDisposable
         int crashCount;
         lock (_gate) { crashCount = _recentCrashes.Count; }
         int delayMs = Math.Min(5000, 250 * (int)Math.Pow(2, Math.Max(0, crashCount - 1)));
-        Task.Delay(delayMs, cancel).ContinueWith(_ =>
+        // KAN-431 R3 — modernise the respawn delay/continuation.
+        // Previous shape (Task.Delay(...).ContinueWith(...)) worked but
+        // hid the cancellation flow + closure semantics behind a
+        // continuation. Discard-pattern `_ = RespawnAfterDelayAsync(...)`
+        // expresses fire-and-forget cleanly without unobserved-task-
+        // exception worries — the async method's body catches its own
+        // failures and writes them to the sidecar log.
+        _ = RespawnAfterDelayAsync(delayMs, cancel);
+    }
+
+    private async Task RespawnAfterDelayAsync(int delayMs, CancellationToken cancel)
+    {
+        try
         {
-            if (cancel.IsCancellationRequested) return;
-            lock (_gate)
+            await Task.Delay(delayMs, cancel).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Stop() was called during the back-off — nothing to do.
+            return;
+        }
+        if (cancel.IsCancellationRequested) return;
+
+        lock (_gate)
+        {
+            if (_cancel?.IsCancellationRequested ?? true) return;
+            try
             {
-                if (_cancel?.IsCancellationRequested ?? true) return;
-                try
-                {
-                    SpawnLocked(cancel);
-                    SetStateLocked(SidecarState.Starting);
-                }
-                catch (Exception ex)
-                {
-                    // KAN-431 R2 — respawn failure on a thread-pool
-                    // thread; do NOT pop a MessageBox here (no owner
-                    // window, can be hidden or off-screen). Persist
-                    // diagnostic to the sidecar log and open the
-                    // circuit-breaker so the tray UI can surface it.
-                    WriteSidecarLogLine(
-                        "Respawn failed: " + ex.GetType().Name + ": " + ex.Message,
-                        isErr: true);
-                    if (LastStartFailureDetail is not null)
-                    {
-                        WriteSidecarLogLine(LastStartFailureDetail, isErr: true);
-                    }
-                    SetStateLocked(SidecarState.CrashLoop);
-                }
+                SpawnLocked(cancel);
+                SetStateLocked(SidecarState.Starting);
             }
-        }, TaskScheduler.Default);
+            catch (Exception ex)
+            {
+                // KAN-431 R2 — respawn failure on a thread-pool
+                // thread; do NOT pop a MessageBox here (no owner
+                // window, can be hidden or off-screen). Persist
+                // diagnostic to the sidecar log and open the
+                // circuit-breaker so the tray UI can surface it.
+                WriteSidecarLogLine(
+                    "Respawn failed: " + ex.GetType().Name + ": " + ex.Message,
+                    isErr: true);
+                if (LastStartFailureDetail is not null)
+                {
+                    WriteSidecarLogLine(LastStartFailureDetail, isErr: true);
+                }
+                SetStateLocked(SidecarState.CrashLoop);
+            }
+        }
     }
 
     private void SetStateLocked(SidecarState next)

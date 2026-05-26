@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import { readFileSync } from 'node:fs'
 
 export function generateRsaIdentity() {
   const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', {
@@ -108,7 +109,6 @@ export function signRequest(
 
 /** SHA-256 hash of a file's bytes — reported in heartbeat for binary integrity auditing. */
 export function hashFile(filePath: string): string {
-  const fs = require('node:fs') as typeof import('node:fs')
-  const data = fs.readFileSync(filePath)
+  const data = readFileSync(filePath)
   return crypto.createHash('sha256').update(data).digest('hex')
 }
