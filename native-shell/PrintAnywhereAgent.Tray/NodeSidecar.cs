@@ -30,12 +30,21 @@ public sealed class NodeSidecar : IDisposable
     private readonly InstallLayout _layout;
     private readonly int _port;
     private readonly object _gate = new();
+    private readonly object _logGate = new();
     private readonly System.Collections.Generic.Queue<DateTime> _recentCrashes = new();
     private readonly HttpClient _healthClient;
 
     private Process? _process;
     private CancellationTokenSource? _cancel;
     private SidecarState _state = SidecarState.Stopped;
+    /// <summary>
+    /// KAN-431 R2 — populated by <see cref="SpawnLocked"/> when
+    /// <c>Process.Start()</c> throws a <see cref="System.ComponentModel.Win32Exception"/>.
+    /// The MessageBox that used to live inside the lock is now shown from
+    /// <see cref="Start"/> AFTER the lock releases, so the dialog never
+    /// blocks any other Start/Stop/State call on _gate.
+    /// </summary>
+    public string? LastStartFailureDetail { get; private set; }
 
     public NodeSidecar(InstallLayout layout, int port)
     {
@@ -61,6 +70,8 @@ public sealed class NodeSidecar : IDisposable
 
     public void Start()
     {
+        Exception? failure = null;
+        string? failureDetail = null;
         lock (_gate)
         {
             if (_process is { HasExited: false })
@@ -69,8 +80,43 @@ public sealed class NodeSidecar : IDisposable
             }
             _cancel?.Cancel();
             _cancel = new CancellationTokenSource();
-            SpawnLocked(_cancel.Token);
-            SetStateLocked(SidecarState.Starting);
+            try
+            {
+                SpawnLocked(_cancel.Token);
+                SetStateLocked(SidecarState.Starting);
+            }
+            catch (Exception ex)
+            {
+                // KAN-431 R2 — surface the diagnostic OUTSIDE the lock.
+                // Holding _gate while showing a modal MessageBox would
+                // block any other Start/Stop/State call (including the
+                // tray icon's Restart menu item if the operator clicked
+                // it). Capture detail + exception here; show the dialog
+                // and rethrow after the lock releases.
+                failure = ex;
+                failureDetail = LastStartFailureDetail;
+            }
+        }
+        if (failure is not null)
+        {
+            if (failureDetail is not null)
+            {
+                try
+                {
+                    System.Windows.Forms.MessageBox.Show(
+                        failureDetail,
+                        "PrintAnywhere Agent - sidecar start failed",
+                        System.Windows.Forms.MessageBoxButtons.OK,
+                        System.Windows.Forms.MessageBoxIcon.Error);
+                }
+                catch
+                {
+                    // Best-effort — if MessageBox cannot show (e.g. no
+                    // message pump on this thread) the exception below
+                    // still propagates the failure to the caller.
+                }
+            }
+            throw failure;
         }
     }
 
@@ -139,6 +185,14 @@ public sealed class NodeSidecar : IDisposable
         psi.Environment["PRINTANYWHERE_AGENT_UI_PORT"] = _port.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
         var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
+        // KAN-431 R1 — drain stdout + stderr into a rotating-by-size log
+        // file under the data dir. Before this, both streams were
+        // redirected (RedirectStandardOutput / RedirectStandardError =
+        // true) but never read, so the Windows pipe buffer (~4-64 KB)
+        // would fill on a chatty child and the Node process would
+        // block on its next write — freezing the agent silently.
+        process.OutputDataReceived += (_, e) => WriteSidecarLogLine(e.Data, isErr: false);
+        process.ErrorDataReceived += (_, e) => WriteSidecarLogLine(e.Data, isErr: true);
         process.Exited += (_, _) => OnProcessExited(process, cancel);
         try
         {
@@ -152,21 +206,45 @@ public sealed class NodeSidecar : IDisposable
             // Without this catch the exception unwound past Program.Main
             // and the tray died silently — operator saw "click does
             // nothing", Event Log saw "unhandled exception", but no
-            // user-facing diagnosis. Surface it loudly with the actual
-            // command line so the next layout drift is self-explaining.
-            string detail = "Node sidecar failed to start:\n\n"
+            // user-facing diagnosis. KAN-431 R2: capture the detail
+            // string into LastStartFailureDetail and rethrow; the public
+            // Start() reads it AFTER releasing the lock and shows the
+            // MessageBox there. Inside the lock a MessageBox would
+            // block every other concurrent Start/Stop/State call.
+            LastStartFailureDetail = "Node sidecar failed to start:\n\n"
                 + "Executable: " + _layout.NodeExecutable + "\n"
                 + "Entry:      " + _layout.AgentEntryPoint + "\n"
                 + "WorkingDir: " + _layout.VersionDirectory + "\n\n"
                 + ex.Message + " (Win32 error " + ex.NativeErrorCode + ")";
-            System.Windows.Forms.MessageBox.Show(
-                detail,
-                "PrintAnywhere Agent - sidecar start failed",
-                System.Windows.Forms.MessageBoxButtons.OK,
-                System.Windows.Forms.MessageBoxIcon.Error);
             throw;
         }
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
         _process = process;
+    }
+
+    private void WriteSidecarLogLine(string? line, bool isErr)
+    {
+        if (string.IsNullOrEmpty(line)) return;
+        try
+        {
+            string logDir = Path.Combine(_layout.DataDir, "logs");
+            Directory.CreateDirectory(logDir);
+            string logPath = Path.Combine(logDir, "sidecar.log");
+            string stamp = DateTime.UtcNow.ToString("o", System.Globalization.CultureInfo.InvariantCulture);
+            string prefix = isErr ? "ERR" : "OUT";
+            lock (_logGate)
+            {
+                File.AppendAllText(logPath, stamp + " " + prefix + " " + line + Environment.NewLine);
+            }
+        }
+        catch
+        {
+            // Best-effort: a logging failure (full disk, perms) must
+            // never propagate up and kill the sidecar lifecycle. The
+            // sidecar process keeps running; the operator just loses
+            // log lines until the disk problem is resolved.
+        }
     }
 
     private void OnProcessExited(Process exited, CancellationToken cancel)
@@ -196,8 +274,27 @@ public sealed class NodeSidecar : IDisposable
             lock (_gate)
             {
                 if (_cancel?.IsCancellationRequested ?? true) return;
-                SpawnLocked(cancel);
-                SetStateLocked(SidecarState.Starting);
+                try
+                {
+                    SpawnLocked(cancel);
+                    SetStateLocked(SidecarState.Starting);
+                }
+                catch (Exception ex)
+                {
+                    // KAN-431 R2 — respawn failure on a thread-pool
+                    // thread; do NOT pop a MessageBox here (no owner
+                    // window, can be hidden or off-screen). Persist
+                    // diagnostic to the sidecar log and open the
+                    // circuit-breaker so the tray UI can surface it.
+                    WriteSidecarLogLine(
+                        "Respawn failed: " + ex.GetType().Name + ": " + ex.Message,
+                        isErr: true);
+                    if (LastStartFailureDetail is not null)
+                    {
+                        WriteSidecarLogLine(LastStartFailureDetail, isErr: true);
+                    }
+                    SetStateLocked(SidecarState.CrashLoop);
+                }
             }
         }, TaskScheduler.Default);
     }

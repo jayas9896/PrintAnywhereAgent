@@ -94,11 +94,77 @@ async function extractZip(source, destination) {
   await run('python3', ['-m', 'zipfile', '-e', source, destination])
 }
 
+/**
+ * KAN-431 S2 — verify the downloaded Node runtime archive matches the
+ * SHA-256 published by nodejs.org for this exact version + filename.
+ *
+ * Without this, a compromise of nodejs.org's CDN (or a successful MITM
+ * of the build host's TLS to nodejs.org) could swap node.exe for a
+ * backdoored build — and that backdoor would auto-distribute via every
+ * subsequent agent MSI install. nodejs.org publishes SHASUMS256.txt
+ * alongside each release in sha256sum(1) format:
+ *
+ *   <hex>  node-v22.22.2-win-x64.zip
+ *
+ * We fetch that file, find the line for our exact archive name, and
+ * compare against sha256(downloadedZip). Mismatch aborts the build.
+ */
+async function verifyNodeRuntimeChecksum() {
+  const sumsUrl = `https://nodejs.org/dist/${nodeRuntimeVersion}/SHASUMS256.txt`
+  const sumsResponse = await fetch(sumsUrl)
+  if (!sumsResponse.ok) {
+    throw new Error(
+      `Could not fetch ${sumsUrl} (HTTP ${sumsResponse.status}). ` +
+        'Refusing to bundle an unverified Node runtime.',
+    )
+  }
+  const sumsText = await sumsResponse.text()
+  let expectedHex = null
+  for (const rawLine of sumsText.split(/\r?\n/)) {
+    const line = rawLine.trim()
+    if (line.length === 0) continue
+    // sha256sum format: "<64 hex>  <filename>" (two spaces in text mode,
+    // " *<filename>" in binary mode — both appear in nodejs.org's file
+    // depending on the line). Accept either.
+    const space = line.indexOf(' ')
+    if (space !== 64) continue
+    const hash = line.slice(0, 64)
+    const filename = line.slice(space + 1).replace(/^[*\s]+/, '').trim()
+    if (filename === nodeRuntimeArchiveName) {
+      expectedHex = hash.toLowerCase()
+      break
+    }
+  }
+  if (expectedHex === null) {
+    throw new Error(
+      `SHASUMS256.txt at ${sumsUrl} does not list ${nodeRuntimeArchiveName}. ` +
+        'The archive filename or version in build-release.mjs is wrong, ' +
+        'or the nodejs.org release was published without that artifact.',
+    )
+  }
+  const actualHex = (await hashFile(nodeRuntimeArchivePath)).toLowerCase()
+  if (actualHex !== expectedHex) {
+    throw new Error(
+      `Node runtime SHA-256 mismatch for ${nodeRuntimeArchiveName}:\n` +
+        `  expected: ${expectedHex}\n` +
+        `  actual:   ${actualHex}\n` +
+        'Delete the cached archive and rerun, OR investigate a potential ' +
+        'CDN compromise / MITM.',
+    )
+  }
+}
+
 async function includeWindowsNodeRuntime() {
   if (!(await pathExists(nodeRuntimeArchivePath))) {
     console.log(`Downloading Windows Node runtime ${nodeRuntimeVersion}...`)
     await downloadFile(nodeRuntimeUrl, nodeRuntimeArchivePath)
   }
+
+  // KAN-431 S2 — verify before extract, EVERY build (not just first
+  // download). A cached zip on disk could have been tampered with
+  // post-download; recompute + verify on every release build is cheap
+  // (one SHA-256 of a ~30 MB file) and removes the on-disk trust gap.
+  await verifyNodeRuntimeChecksum()
 
   if (!(await pathExists(path.join(nodeRuntimeExtractDir, 'node.exe')))) {
     await fs.rm(nodeRuntimeExtractDir, { recursive: true, force: true })
