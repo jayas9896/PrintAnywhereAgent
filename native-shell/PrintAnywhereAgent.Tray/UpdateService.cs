@@ -38,9 +38,8 @@ namespace Dhruvanta.PrintAnywhere.AgentTray;
 /// </summary>
 public sealed class UpdateService : IDisposable
 {
-    private const string GithubRepo = "Jayashanker-Padishala/PrintAnywhereAgent";
-    private const string GithubApiBase = "https://api.github.com";
-
+    // KAN-431 S4 — repo + API base now live on AgentConstants so a
+    // future org transfer is a single-file change. See AgentConstants.cs.
     private readonly HttpClient _http;
     private readonly Version _currentVersion;
 
@@ -163,7 +162,7 @@ public sealed class UpdateService : IDisposable
 
     private async Task<GithubRelease?> FetchLatestReleaseAsync(CancellationToken cancel)
     {
-        string url = $"{GithubApiBase}/repos/{GithubRepo}/releases/latest";
+        string url = $"{AgentConstants.GithubApiBase}/repos/{AgentConstants.GithubRepo}/releases/latest";
         var response = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancel).ConfigureAwait(false);
         if (response.StatusCode == System.Net.HttpStatusCode.NotFound) return null;
         response.EnsureSuccessStatusCode();

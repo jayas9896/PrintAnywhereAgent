@@ -39,14 +39,24 @@ export interface KeyMaterialProtector {
  * The blob is round-tripped as base64 on the PowerShell command line. DPAPI
  * payloads here are tiny (a 32-byte salt wraps to a few hundred bytes), well
  * within command-line limits.
+ *
+ * KAN-431 S5 — the PowerShell script is passed via `-EncodedCommand`
+ * (UTF-16LE base64 of the full script) rather than string-interpolating the
+ * base64 payload into a `-Command` literal. -EncodedCommand decodes inside
+ * PowerShell, so no quote/escape boundary exists in the constructed command
+ * line. Today's base64 payload is quote-safe, but a future encoding swap
+ * (hex, raw text, etc.) won't reintroduce an injection footgun.
  */
 export class DpapiProtector implements KeyMaterialProtector {
   readonly bindsToOsKeystore = true
 
   private async runPowerShell(script: string): Promise<string> {
+    // PowerShell's -EncodedCommand expects a base64-encoded UTF-16LE
+    // (little-endian) string of the entire script body.
+    const encoded = Buffer.from(script, 'utf16le').toString('base64')
     const { stdout } = await execFileAsync(
       'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-Command', script],
+      ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
       { windowsHide: true, maxBuffer: 1024 * 1024 },
     )
     return stdout.trim()
