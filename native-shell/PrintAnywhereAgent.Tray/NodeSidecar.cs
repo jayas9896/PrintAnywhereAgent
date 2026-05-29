@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
 using System.Net.Security;
+using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -37,6 +38,10 @@ public sealed class NodeSidecar : IDisposable
     private Process? _process;
     private CancellationTokenSource? _cancel;
     private SidecarState _state = SidecarState.Stopped;
+    // KAN-431 S3 — guards the one-time "running in unpinned mode" log
+    // line so the health probe (which fires every few seconds) does not
+    // flood sidecar.log with the same warning on every handshake.
+    private int _unpinnedWarningLogged;
     /// <summary>
     /// KAN-431 R2 — populated by <see cref="SpawnLocked"/> when
     /// <c>Process.Start()</c> throws a <see cref="System.ComponentModel.Win32Exception"/>.
@@ -52,8 +57,17 @@ public sealed class NodeSidecar : IDisposable
         _port = port;
         var handler = new HttpClientHandler
         {
-            // Loopback only — agent's local UI uses a self-signed cert.
-            ServerCertificateCustomValidationCallback = (_, _, _, _) => true,
+            // KAN-431 S3 — pin the loopback TLS thumbprint instead of
+            // blanket-accepting any cert. The agent's Node side writes
+            // the SHA-1 thumbprint of its self-signed local-UI cert to
+            // <dataDir>/tls/local-ui-thumbprint.txt (see src/ui/localHttps.ts).
+            // The probe accepts a cert ONLY when (a) the connection is
+            // loopback (127.0.0.1) AND (b) the presented cert's thumbprint
+            // matches the pinned file. If the thumbprint file is absent
+            // (first run, before Node has generated the cert) we fall back
+            // to loopback-only "accept any cert" so the probe does not
+            // hard-fail during startup — logging once that it is unpinned.
+            ServerCertificateCustomValidationCallback = ValidateLoopbackCertificate,
         };
         _healthClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
     }
@@ -159,6 +173,69 @@ public sealed class NodeSidecar : IDisposable
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// KAN-431 S3 — TLS validation callback for the loopback health
+    /// probe. Trust anchor is the pinned thumbprint the Node side wrote
+    /// to <c>&lt;dataDir&gt;/tls/local-ui-thumbprint.txt</c>; the cert is
+    /// self-signed so chain errors are EXPECTED and ignored — the
+    /// thumbprint match (not a clean chain) is the proof of identity.
+    /// </summary>
+    private bool ValidateLoopbackCertificate(
+        HttpRequestMessage request,
+        X509Certificate2? certificate,
+        X509Chain? chain,
+        SslPolicyErrors errors)
+    {
+        // Hard requirement in both pinned and unpinned modes: the probe
+        // only ever talks to 127.0.0.1, so a non-loopback peer is never
+        // acceptable regardless of the cert it presents.
+        if (request.RequestUri?.IsLoopback != true)
+        {
+            return false;
+        }
+        if (certificate is null)
+        {
+            return false;
+        }
+
+        string thumbprintPath = Path.Combine(_layout.DataDir, "tls", "local-ui-thumbprint.txt");
+        string? pinned = null;
+        try
+        {
+            if (File.Exists(thumbprintPath))
+            {
+                // TS writes it uppercase, colon-free SHA-1, trailing '\n'.
+                pinned = File.ReadAllText(thumbprintPath).Trim();
+            }
+        }
+        catch
+        {
+            // Read failure (perms / racing write) — treat as absent and
+            // fall through to unpinned loopback-only mode.
+        }
+
+        if (string.IsNullOrEmpty(pinned))
+        {
+            // First run before Node generated the cert: accept any cert
+            // on loopback so the probe doesn't hard-fail during startup.
+            // Log once — the probe fires every few seconds.
+            if (Interlocked.Exchange(ref _unpinnedWarningLogged, 1) == 0)
+            {
+                WriteSidecarLogLine(
+                    "Health probe TLS running in UNPINNED mode: thumbprint file absent ("
+                    + thumbprintPath + "). Accepting any cert on loopback until the "
+                    + "Node side writes its cert thumbprint.",
+                    isErr: true);
+            }
+            return true;
+        }
+
+        // certificate.Thumbprint is uppercase, colon-free SHA-1 — same
+        // form the TS side writes — but compare case-insensitively to be
+        // robust against either side's casing.
+        return string.Equals(certificate.Thumbprint, pinned, StringComparison.OrdinalIgnoreCase);
     }
 
     private void SpawnLocked(CancellationToken cancel)
