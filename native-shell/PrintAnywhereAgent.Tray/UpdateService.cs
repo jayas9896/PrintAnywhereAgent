@@ -41,7 +41,20 @@ public sealed class UpdateService : IDisposable
     // KAN-431 S4 — repo + API base now live on AgentConstants so a
     // future org transfer is a single-file change. See AgentConstants.cs.
     private readonly HttpClient _http;
+    // KAN-431 R4 — a dedicated client for the (potentially 50 MB) asset
+    // download. HttpClient.Timeout is a TOTAL-operation ceiling that keeps
+    // running while the body stream is read under ResponseHeadersRead, so
+    // the 2-min check client would kill a large download mid-stream no
+    // matter what CancellationToken we layer on. A separate 10-min client
+    // raises that ceiling for the download path only, leaving the check
+    // path's tight 2-min timeout intact.
+    private readonly HttpClient _downloadHttp;
     private readonly Version _currentVersion;
+
+    // KAN-431 R4 — number of full download attempts before giving up, and
+    // the suffix used for the resumable partial file.
+    private const int MaxDownloadAttempts = 3;
+    private const string PartialSuffix = ".partial";
 
     public UpdateService(Version currentVersion)
     {
@@ -54,6 +67,15 @@ public sealed class UpdateService : IDisposable
                 { "Accept", "application/vnd.github+json" },
             },
             Timeout = TimeSpan.FromMinutes(2),
+        };
+        _downloadHttp = new HttpClient
+        {
+            DefaultRequestHeaders =
+            {
+                { "User-Agent", "PrintAnywhereAgentUpdater" },
+            },
+            // Generous ceiling for a large MSI on flaky shop wifi.
+            Timeout = TimeSpan.FromMinutes(10),
         };
     }
 
@@ -105,8 +127,8 @@ public sealed class UpdateService : IDisposable
         string setupPath = Path.Combine(tempDir, result.SetupAsset.Name);
         string checksumPath = Path.Combine(tempDir, "SHA256SUMS.txt");
 
-        await DownloadAsync(result.SetupAsset.BrowserDownloadUrl, setupPath, bytes, cancel).ConfigureAwait(false);
-        await DownloadAsync(result.ChecksumAsset.BrowserDownloadUrl, checksumPath, null, cancel).ConfigureAwait(false);
+        await DownloadAsync(result.SetupAsset.BrowserDownloadUrl, setupPath, result.SetupAsset.Size, bytes, cancel).ConfigureAwait(false);
+        await DownloadAsync(result.ChecksumAsset.BrowserDownloadUrl, checksumPath, null, null, cancel).ConfigureAwait(false);
 
         VerifyChecksum(setupPath, checksumPath, result.SetupAsset.Name);
         return setupPath;
@@ -200,21 +222,99 @@ public sealed class UpdateService : IDisposable
         return Version.Parse(trimmed);
     }
 
-    private async Task DownloadAsync(string url, string targetPath, IProgress<long>? bytes, CancellationToken cancel)
+    /// <summary>
+    /// KAN-431 R4 — resumable, retrying download. Streams to
+    /// <c>targetPath + ".partial"</c>; on a transient
+    /// <see cref="IOException"/>/<see cref="HttpRequestException"/> it
+    /// retries (up to <see cref="MaxDownloadAttempts"/>) sending a
+    /// <c>Range</c> header to resume from the bytes already on disk.
+    /// GitHub release assets honour Range and reply 206; if a server
+    /// ignores Range and replies 200 (whole file from byte 0) we restart
+    /// the partial file cleanly so it is never corrupted by appending.
+    /// On full completion the partial is renamed to the final path. The
+    /// SHA-256 verification in <see cref="VerifyChecksum"/> still runs
+    /// AFTER this returns — unchanged.
+    /// </summary>
+    private async Task DownloadAsync(string url, string targetPath, long? expectedSize, IProgress<long>? bytes, CancellationToken cancel)
     {
-        using var response = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancel).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
-        await using var source = await response.Content.ReadAsStreamAsync(cancel).ConfigureAwait(false);
-        await using var dest = File.Create(targetPath);
-        var buffer = new byte[81920];
-        long total = 0;
-        int read;
-        while ((read = await source.ReadAsync(buffer, cancel).ConfigureAwait(false)) > 0)
+        string partialPath = targetPath + PartialSuffix;
+        Exception? lastTransient = null;
+
+        for (int attempt = 1; attempt <= MaxDownloadAttempts; attempt++)
         {
-            await dest.WriteAsync(buffer.AsMemory(0, read), cancel).ConfigureAwait(false);
-            total += read;
-            bytes?.Report(total);
+            cancel.ThrowIfCancellationRequested();
+
+            long existing = 0;
+            if (File.Exists(partialPath))
+            {
+                existing = new FileInfo(partialPath).Length;
+                // A stale partial at/over the expected size can't be
+                // resumed (Range would 416) — start clean.
+                if (expectedSize is long size && existing >= size && size > 0)
+                {
+                    File.Delete(partialPath);
+                    existing = 0;
+                }
+            }
+
+            // Each attempt gets its own request so the Range offset
+            // reflects what is currently on disk.
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            if (existing > 0)
+            {
+                request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(existing, null);
+            }
+
+            try
+            {
+                using var response = await _downloadHttp
+                    .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancel)
+                    .ConfigureAwait(false);
+                response.EnsureSuccessStatusCode();
+
+                // 206 Partial Content → server honoured Range, append.
+                // Anything else (notably 200) → server sent the WHOLE
+                // file from byte 0, so we must overwrite, not append, or
+                // the file is corrupted. This is the clean-restart path.
+                bool resumed = response.StatusCode == System.Net.HttpStatusCode.PartialContent;
+                long total = resumed ? existing : 0;
+                FileMode mode = resumed ? FileMode.Append : FileMode.Create;
+
+                await using (var source = await response.Content.ReadAsStreamAsync(cancel).ConfigureAwait(false))
+                await using (var dest = new FileStream(partialPath, mode, FileAccess.Write, FileShare.None))
+                {
+                    var buffer = new byte[81920];
+                    int read;
+                    bytes?.Report(total);
+                    while ((read = await source.ReadAsync(buffer, cancel).ConfigureAwait(false)) > 0)
+                    {
+                        await dest.WriteAsync(buffer.AsMemory(0, read), cancel).ConfigureAwait(false);
+                        total += read;
+                        bytes?.Report(total);
+                    }
+                }
+
+                // Success — promote the partial to the final path.
+                File.Move(partialPath, targetPath, overwrite: true);
+                return;
+            }
+            catch (OperationCanceledException)
+            {
+                // User abort or a fired per-download timeout — never
+                // retry; let the caller see the cancellation.
+                throw;
+            }
+            catch (Exception ex) when (ex is IOException or HttpRequestException)
+            {
+                // Transient network/disk blip — keep the partial file so
+                // the next attempt resumes from where this one stopped.
+                lastTransient = ex;
+                cancel.ThrowIfCancellationRequested();
+            }
         }
+
+        throw new IOException(
+            $"Download of {url} failed after {MaxDownloadAttempts} attempts.", lastTransient);
     }
 
     private static void VerifyChecksum(string setupPath, string checksumPath, string setupName)
@@ -254,7 +354,11 @@ public sealed class UpdateService : IDisposable
         return null;
     }
 
-    public void Dispose() => _http.Dispose();
+    public void Dispose()
+    {
+        _http.Dispose();
+        _downloadHttp.Dispose();
+    }
 }
 
 public enum UpdateAvailability
