@@ -17,6 +17,8 @@ jobs:
       ES_PASSWORD: ${{ secrets.ES_PASSWORD }}
       ES_CREDENTIAL_ID: ${{ secrets.ES_CREDENTIAL_ID }}
       ES_TOTP_SECRET: ${{ secrets.ES_TOTP_SECRET }}
+      # KAN-449 (trust, point 7): optional VirusTotal pre-publish scan.
+      VT_API_KEY: ${{ secrets.VT_API_KEY }}
 
     steps:
       - uses: actions/checkout@v6
@@ -111,6 +113,50 @@ jobs:
           echo "$out" | grep -qiE "timestamp|signing time" || {
             echo "::error title=No timestamp::setup.exe is signed but NOT RFC3161-timestamped." >&2; exit 1; }
           echo "::notice title=Code signing::setup.exe verified SIGNED + TIMESTAMPED."
+
+      # KAN-449 (trust, point 7): scan the SIGNED installer on VirusTotal
+      # before publishing. Goal = 0 detections (AV flags slow SmartScreen
+      # reputation growth). Runs only when VT_API_KEY is configured, and is
+      # report-only — a transient false positive on a test build should not
+      # wedge the release; review the linked report before promoting to GA.
+      - name: VirusTotal scan (signed setup.exe)
+        if: ${{ env.VT_API_KEY != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          exe="artifacts/printanywhere-agent-v${{ steps.version.outputs.version }}-setup.exe"
+          size=$(stat -c%s "$exe")
+          echo "Uploading ${exe} (${size} bytes) to VirusTotal..."
+          if [ "$size" -gt 33554432 ]; then
+            up=$(curl -s --fail -H "x-apikey: ${VT_API_KEY}" https://www.virustotal.com/api/v3/files/upload_url \
+                 | python3 -c "import sys,json;print(json.load(sys.stdin)['data'])")
+          else
+            up="https://www.virustotal.com/api/v3/files"
+          fi
+          analysis_id=$(curl -s --fail -H "x-apikey: ${VT_API_KEY}" -F "file=@${exe}" "$up" \
+                        | python3 -c "import sys,json;print(json.load(sys.stdin)['data']['id'])")
+          echo "Analysis id: ${analysis_id}"
+          resp=""
+          for i in $(seq 1 30); do
+            sleep 10
+            resp=$(curl -s --fail -H "x-apikey: ${VT_API_KEY}" "https://www.virustotal.com/api/v3/analyses/${analysis_id}")
+            status=$(echo "$resp" | python3 -c "import sys,json;print(json.load(sys.stdin)['data']['attributes']['status'])")
+            echo "  poll ${i}: status=${status}"
+            [ "$status" = "completed" ] && break
+          done
+          read mal susp < <(echo "$resp" | python3 -c "import sys,json;s=json.load(sys.stdin)['data']['attributes']['stats'];print(s.get('malicious',0),s.get('suspicious',0))")
+          sha=$(sha256sum "$exe" | cut -d' ' -f1)
+          link="https://www.virustotal.com/gui/file/${sha}"
+          if [ "${mal:-0}" -gt 0 ] || [ "${susp:-0}" -gt 0 ]; then
+            echo "::warning title=VirusTotal detections::setup.exe: ${mal} malicious + ${susp} suspicious. Review ${link} before promoting to GA."
+          else
+            echo "::notice title=VirusTotal::0 detections on setup.exe — ${link}"
+          fi
+
+      - name: VirusTotal scan skipped (no VT_API_KEY)
+        if: ${{ env.VT_API_KEY == '' }}
+        shell: bash
+        run: echo "::notice title=VirusTotal::VT_API_KEY not configured — skipping pre-publish VirusTotal scan (KAN-449 follow-up). Add a VT_API_KEY repo secret to enable."
 
       - name: Create GitHub release
         env:
