@@ -10,6 +10,13 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    # Map signing secrets into env so step `if:` conditions can reference them.
+    # GitHub does not expose the `secrets` context directly in `if:`.
+    env:
+      ES_USERNAME: ${{ secrets.ES_USERNAME }}
+      ES_PASSWORD: ${{ secrets.ES_PASSWORD }}
+      ES_CREDENTIAL_ID: ${{ secrets.ES_CREDENTIAL_ID }}
+      ES_TOTP_SECRET: ${{ secrets.ES_TOTP_SECRET }}
 
     steps:
       - uses: actions/checkout@v6
@@ -37,6 +44,53 @@ jobs:
       - name: Get version
         id: version
         run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      # Sign setup.exe BEFORE the checksum is recomputed and BEFORE the release
+      # is created, so the published SHA256SUMS matches the signed bytes.
+      # CodeSignTool (eSigner) is Java-based and runs on ubuntu-latest.
+      # Skips gracefully when the ES_* secrets are not configured.
+      - name: Sign setup.exe with SSL.com eSigner
+        if: ${{ env.ES_USERNAME != '' }}
+        uses: sslcom/esigner-codesign@develop
+        with:
+          command: sign
+          username: ${{ secrets.ES_USERNAME }}
+          password: ${{ secrets.ES_PASSWORD }}
+          credential_id: ${{ secrets.ES_CREDENTIAL_ID }}
+          totp_secret: ${{ secrets.ES_TOTP_SECRET }}
+          file_path: ${{ github.workspace }}/artifacts/printanywhere-agent-v${{ steps.version.outputs.version }}-setup.exe
+          override: true
+          malware_block: false
+
+      # The build step wrote SHA256SUMS.txt against the UNSIGNED setup.exe.
+      # Signing in place changed the bytes, so refresh ONLY the setup.exe line
+      # (other lines stay intact). Line format must match the build scripts:
+      # "<digest>  <basename>" (two spaces, bare basename, no path).
+      - name: Refresh SHA256SUMS.txt for signed setup.exe
+        if: ${{ env.ES_USERNAME != '' }}
+        shell: bash
+        run: |
+          cd artifacts
+          exe="printanywhere-agent-v${{ steps.version.outputs.version }}-setup.exe"
+          # Drop any existing line for the setup.exe, keep the rest.
+          if [ -f SHA256SUMS.txt ]; then
+            grep -v "  ${exe}\$" SHA256SUMS.txt > SHA256SUMS.tmp || true
+          else
+            : > SHA256SUMS.tmp
+          fi
+          sha256sum "${exe}" >> SHA256SUMS.tmp
+          mv SHA256SUMS.tmp SHA256SUMS.txt
+          echo "Refreshed SHA256SUMS.txt:"
+          cat SHA256SUMS.txt
+
+      - name: Code-signing summary (setup.exe)
+        shell: bash
+        run: |
+          if [ -n "${ES_USERNAME}" ]; then
+            echo "::notice title=Code signing::setup.exe SIGNED with SSL.com eSigner; SHA256SUMS refreshed for signed bytes."
+          else
+            echo "::warning title=Code signing::ES_* secrets not set — setup.exe is UNSIGNED (release still published)."
+          fi
 
       - name: Create GitHub release
         env:
@@ -70,6 +124,12 @@ jobs:
     permissions:
       contents: write
     timeout-minutes: 25
+    # Map signing secrets into env so step `if:` conditions can reference them.
+    env:
+      ES_USERNAME: ${{ secrets.ES_USERNAME }}
+      ES_PASSWORD: ${{ secrets.ES_PASSWORD }}
+      ES_CREDENTIAL_ID: ${{ secrets.ES_CREDENTIAL_ID }}
+      ES_TOTP_SECRET: ${{ secrets.ES_TOTP_SECRET }}
 
     steps:
       - uses: actions/checkout@v6
@@ -138,6 +198,30 @@ jobs:
           if (-not $msi) { throw "MSI was not produced" }
           "path=$($msi.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           Write-Host "MSI: $($msi.FullName) ($([math]::Round($msi.Length / 1MB, 1)) MB)"
+
+      # Sign the MSI in place BEFORE it is uploaded to the release.
+      # Skips gracefully when the ES_* secrets are not configured.
+      - name: Sign MSI with SSL.com eSigner
+        if: ${{ env.ES_USERNAME != '' }}
+        uses: sslcom/esigner-codesign@develop
+        with:
+          command: sign
+          username: ${{ secrets.ES_USERNAME }}
+          password: ${{ secrets.ES_PASSWORD }}
+          credential_id: ${{ secrets.ES_CREDENTIAL_ID }}
+          totp_secret: ${{ secrets.ES_TOTP_SECRET }}
+          file_path: ${{ steps.msi.outputs.path }}
+          override: true
+          malware_block: false
+
+      - name: Code-signing summary (MSI)
+        shell: pwsh
+        run: |
+          if ($env:ES_USERNAME) {
+            Write-Host "::notice title=Code signing::MSI SIGNED with SSL.com eSigner before upload."
+          } else {
+            Write-Host "::warning title=Code signing::ES_* secrets not set — MSI is UNSIGNED (still uploaded)."
+          }
 
       - name: Upload MSI to the GitHub release
         shell: pwsh
