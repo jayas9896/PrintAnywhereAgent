@@ -314,6 +314,42 @@ function redirectWithStatus(
   redirectTo(response, path, type, message)
 }
 
+/**
+ * KAN inline-confirm+toast: a request is the progressive-enhancement AJAX
+ * call (fetch) only when it carries the explicit `X-Requested-With: fetch`
+ * header the client JS sets. We deliberately do NOT negotiate on `Accept`, so
+ * a plain form submit keeps its existing 302 PRG redirect (no-JS path
+ * unchanged).
+ */
+function isFetchRequest(request: Request): boolean {
+  const header = request.headers['x-requested-with']
+  return String(Array.isArray(header) ? header[0] : header ?? '').toLowerCase() === 'fetch'
+}
+
+/**
+ * Content-negotiating responder for the destructive printer actions. AJAX
+ * callers get a small JSON payload (so the client can update the row/card +
+ * show an inline toast with no navigation); plain form submits keep the
+ * existing PRG redirect via redirectWithStatus. The human `message` string is
+ * the single source of truth — it is exactly what the flash banner would have
+ * rendered, so the toast text always matches. Only the two enhanced handlers
+ * use this; the uiToken/loopback CSRF gate (verifyUiRequest) still runs before
+ * either branch.
+ */
+function respondOrRedirect(
+  request: Request,
+  response: Response,
+  type: 'notice' | 'error',
+  message: string,
+  path: string = '/',
+) {
+  if (isFetchRequest(request)) {
+    response.status(type === 'notice' ? 200 : 400).json({ ok: type === 'notice', notice: message })
+    return
+  }
+  redirectWithStatus(response, type, message, path)
+}
+
 function friendlyConfigureError(error: unknown) {
   const message = error instanceof Error ? error.message : 'Configuration failed'
   if (message.includes('Machine is already registered') || message.includes('"code":"CONFLICT"')) {
@@ -2388,6 +2424,7 @@ function pageShell(
   <style>${SHARED_CSS}</style>
 </head>
 <body>
+  <div id="pa-toast-region" aria-live="polite" aria-atomic="false"></div>
   <div class="app-shell">
     <aside class="app-sidebar" aria-label="PrintAnywhere Agent navigation">
       <a href="/" class="app-sidebar-brand">
@@ -2419,6 +2456,142 @@ function pageShell(
       </main>
     </div>
   </div>
+  <style>
+    /* KAN inline confirm + toast (progressive enhancement) for destructive printer actions. */
+    .pa-inline-confirm { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
+    .pa-inline-confirm-text { font-size: 0.85rem; }
+    #pa-toast-region {
+      position: fixed; top: 16px; right: 16px; z-index: 1000;
+      display: flex; flex-direction: column; gap: 8px;
+      max-width: min(360px, calc(100vw - 32px)); pointer-events: none;
+    }
+    .pa-toast {
+      padding: 10px 14px; border-radius: 8px;
+      background: #1f2937; color: #e5e7eb; border: 1px solid #374151;
+      box-shadow: 0 6px 18px rgba(0,0,0,0.35);
+      opacity: 0; transform: translateY(-6px);
+      transition: opacity .18s ease, transform .18s ease; pointer-events: auto;
+    }
+    .pa-toast.is-visible { opacity: 1; transform: translateY(0); }
+    .pa-toast.is-error { border-color: #b91c1c; color: #fecaca; }
+    [data-pa-card].is-removing, [data-pa-row].is-removing { opacity: 0; transition: opacity .18s ease; }
+  </style>
+  <script>
+(function () {
+  'use strict';
+  var region = document.getElementById('pa-toast-region');
+
+  function showToast(message, isError) {
+    if (!region || !message) return;
+    var toast = document.createElement('div');
+    toast.className = 'pa-toast' + (isError ? ' is-error' : '');
+    toast.setAttribute('role', isError ? 'alert' : 'status');
+    // textContent only (never innerHTML) so a printer name cannot inject markup.
+    toast.textContent = message;
+    region.appendChild(toast);
+    void toast.offsetWidth;
+    toast.classList.add('is-visible');
+    window.setTimeout(function () {
+      toast.classList.remove('is-visible');
+      window.setTimeout(function () {
+        if (toast.parentNode) toast.parentNode.removeChild(toast);
+      }, 250);
+    }, 4000);
+  }
+
+  function clearConfirm(form) {
+    var box = form.querySelector('.pa-inline-confirm');
+    if (box && box.parentNode) box.parentNode.removeChild(box);
+  }
+
+  // Inline confirm. Resolves true to proceed, false to cancel.
+  function requestConfirm(form) {
+    var prompt = form.getAttribute('data-pa-confirm');
+    if (!prompt) return Promise.resolve(true);
+    if (form.querySelector('.pa-inline-confirm')) { clearConfirm(form); return Promise.resolve(true); }
+    return new Promise(function (resolve) {
+      var box = document.createElement('span');
+      box.className = 'pa-inline-confirm';
+      var text = document.createElement('span');
+      text.className = 'pa-inline-confirm-text';
+      text.textContent = prompt;
+      var yes = document.createElement('button');
+      yes.type = 'button'; yes.className = 'btn btn-danger'; yes.textContent = 'Confirm';
+      var no = document.createElement('button');
+      no.type = 'button'; no.className = 'btn btn-secondary'; no.textContent = 'Cancel';
+      box.appendChild(text); box.appendChild(yes); box.appendChild(no);
+      form.appendChild(box);
+      yes.focus();
+      yes.addEventListener('click', function () { clearConfirm(form); resolve(true); });
+      no.addEventListener('click', function () { clearConfirm(form); resolve(false); });
+    });
+  }
+
+  function applyResult(form) {
+    var mode = form.getAttribute('data-pa-ajax');
+    if (mode === 'platform-remove') {
+      var card = form.closest('[data-pa-card]');
+      if (card) {
+        card.classList.add('is-removing');
+        window.setTimeout(function () { if (card.parentNode) card.parentNode.removeChild(card); }, 200);
+      }
+      return;
+    }
+    if (mode === 'share-toggle') {
+      // Stop-sharing succeeded: flip this row's form back to a (non-destructive)
+      // "Share printer" submit in place. The next full load re-renders
+      // authoritatively from the snapshot.
+      var hidden = form.querySelector('input[name="shared"]');
+      if (hidden) hidden.value = 'true';
+      var btn = form.querySelector('button[type="submit"], button:not([type])');
+      if (btn) { btn.disabled = false; btn.textContent = 'Share printer'; }
+      form.removeAttribute('data-pa-ajax');
+      form.removeAttribute('data-pa-confirm');
+    }
+  }
+
+  document.addEventListener('submit', function (event) {
+    var form = event.target;
+    if (!form || !form.matches || !form.matches('[data-pa-ajax]')) return;
+    if (typeof window.fetch !== 'function') return; // no-JS-style fallback: normal submit
+
+    event.preventDefault();
+    requestConfirm(form).then(function (ok) {
+      if (!ok) return;
+      var body = new URLSearchParams(new FormData(form)).toString();
+      fetch(form.action, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Accept': 'application/json',
+          'X-Requested-With': 'fetch'
+        },
+        body: body
+      })
+        .then(function (res) {
+          return res.json().catch(function () { return {}; }).then(function (data) {
+            return { res: res, data: data };
+          });
+        })
+        .then(function (out) {
+          if (!out.res.ok || !out.data.ok) {
+            showToast((out.data && out.data.notice) || 'That action could not be completed.', true);
+            return;
+          }
+          applyResult(form);
+          showToast(out.data.notice || 'Done.', false);
+        })
+        .catch(function () {
+          // Network/parse failure: fall back to a normal full submit so the
+          // operator still gets the action + the existing PRG flash banner.
+          form.removeAttribute('data-pa-ajax');
+          form.submit();
+        });
+    });
+  });
+})();
+  </script>
   ${SHARED_SCRIPTS}
 </body>
 </html>`
@@ -3434,7 +3607,7 @@ function renderPrintersPageCards(
             ${platformPrinters
               .map(
                 (printer) => `
-                  <details>
+                  <details data-pa-card data-pa-printer-name="${htmlEscape(printer.name)}">
                     <summary>
                       <span class="summary-row">
                         <span>${htmlEscape(printer.name)} · <span class="muted">${htmlEscape(printer.agentPrinterName)}</span></span>
@@ -3451,7 +3624,7 @@ function renderPrintersPageCards(
                     ${profile?.selfServiceEnabled
                       ? `
                         ${renderPlatformPrinterForm(snapshot.uiToken, sharedPrinterNames, printer)}
-                        <form method="post" action="/platform-printers/remove" class="js-pending-form" style="margin-top:12px;">
+                        <form method="post" action="/platform-printers/remove" class="js-pending-form" style="margin-top:12px;" data-pa-ajax="platform-remove" data-pa-confirm="Unpublish this platform printer? Customers will no longer see it.">
                           ${hiddenUiToken(snapshot.uiToken)}
                           <input type="hidden" name="printerId" value="${htmlEscape(printer.printerId)}" />
                           <button class="btn btn-danger" type="submit" data-pending-text="Unpublishing…">Unpublish printer</button>
@@ -3483,7 +3656,7 @@ function renderPrintersPageCards(
                 </form>`,
               })
             : snapshot.printers.map((printer) => `
-            <tr>
+            <tr data-pa-row data-pa-printer-name="${htmlEscape(printer.localPrinterName)}">
               <td>
                 <strong>${htmlEscape(printer.localPrinterName)}</strong><br/>
                 <span class="muted small">${htmlEscape(printer.driverName ?? 'Unknown driver')} · ${htmlEscape(printer.connectionType)}</span>
@@ -3494,7 +3667,7 @@ function renderPrintersPageCards(
                 ${htmlEscape(printer.supportedPaperSizes.join(', ') || 'Unknown sizes')}
               </td>
               <td>
-                <form method="post" action="/printers/share" class="js-pending-form">
+                <form method="post" action="/printers/share" class="js-pending-form"${printer.shared ? ' data-pa-ajax="share-toggle" data-pa-confirm="Stop sharing this printer?"' : ''}>
                   ${hiddenUiToken(snapshot.uiToken)}
                   <input type="hidden" name="localPrinterName" value="${htmlEscape(printer.localPrinterName)}" />
                   <input type="hidden" name="shared" value="${printer.shared ? 'false' : 'true'}" />
@@ -4992,10 +5165,11 @@ export async function startUiServer(runtime: AgentRuntime) {
   app.post('/printers/share', async (request, response) => {
     if (!verifyUiRequest(runtime, request, response)) return
     try {
-      await runtime.setPrinterShared(String(request.body.localPrinterName ?? ''), String(request.body.shared ?? '') === 'true')
-      redirectWithStatus(response, 'notice', 'Local printer sharing updated.')
+      const shared = String(request.body.shared ?? '') === 'true'
+      await runtime.setPrinterShared(String(request.body.localPrinterName ?? ''), shared)
+      respondOrRedirect(request, response, 'notice', shared ? 'Printer is now shared.' : 'Printer sharing stopped.')
     } catch (error) {
-      redirectWithStatus(response, 'error', error instanceof Error ? error.message : 'Could not update printer sharing')
+      respondOrRedirect(request, response, 'error', error instanceof Error ? error.message : 'Could not update printer sharing')
     }
   })
 
@@ -5129,9 +5303,9 @@ export async function startUiServer(runtime: AgentRuntime) {
     if (!verifyUiRequest(runtime, request, response)) return
     try {
       await runtime.removePlatformPrinter(String(request.body.printerId ?? ''))
-      redirectWithStatus(response, 'notice', 'Platform printer unpublished.')
+      respondOrRedirect(request, response, 'notice', 'Platform printer unpublished.')
     } catch (error) {
-      redirectWithStatus(response, 'error', error instanceof Error ? error.message : 'Could not unpublish platform printer')
+      respondOrRedirect(request, response, 'error', error instanceof Error ? error.message : 'Could not unpublish platform printer')
     }
   })
 
