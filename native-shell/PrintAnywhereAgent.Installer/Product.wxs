@@ -109,6 +109,14 @@
     <Property Id="ARPCONTACT" Value="support@dhruvantasystems.com" />
     <Property Id="ARPHELPLINK" Value="https://printanywhere.dhruvantasystems.com/" />
 
+    <!-- KAN-425: Add/Remove Programs icon. The native tray publish
+         step (build-native-tray.mjs) copies assets/dhruvanta-agent.ico
+         into the staged payload root, so it is present at
+         $(var.PayloadSource)\dhruvanta-agent.ico at WiX compile time
+         AND ships to [INSTALLDIR]dhruvanta-agent.ico at runtime. -->
+    <Icon Id="PrintAnywhereAgent.ico" SourceFile="$(var.PayloadSource)\dhruvanta-agent.ico" />
+    <Property Id="ARPPRODUCTICON" Value="PrintAnywhereAgent.ico" />
+
     <Feature Id="MainFeature"
              Title="PrintAnywhere Agent"
              Level="1"
@@ -123,6 +131,80 @@
            wires every staged-bundle file. -->
       <ComponentGroupRef Id="PayloadComponents" />
     </Feature>
+
+    <!-- ===================================================================
+         KAN-425: per-user provisioning CustomAction.
+
+         PRIMARY FIX for the v0.1.37 symptom (operator installed the MSI
+         and saw nothing for ~5 min: no tray icon, no Add/Remove entry,
+         the local UI never loaded). Root cause: the MSI laid the files
+         down but NOTHING ever ran install-release.ps1, so the per-user
+         setup (tray launch, runtime start on 127.0.0.1:43100, logon
+         autostart, shortcuts) never happened.
+
+         This deferred, IMPERSONATED CustomAction runs the bundled
+         install-release.ps1 as the installing user (NO elevation — this
+         is a perUser MSI) right after the files are committed. It does
+         ONLY the per-user steps, all of which need no admin:
+           * launches the tray (-StartTray) -> tray icon appears
+           * starts the agent runtime -> https://127.0.0.1:43100 serves
+           * registers logon autostart (-RegisterStartupTask)
+           * creates Desktop / Start Menu shortcuts (-CreateShortcuts)
+
+         The two admin-only bits inside install-release.ps1 (hosts-file
+         entry + cert trust for the pretty domain
+         local.printanywhere.dhruvantasystems.com) DEGRADE TO A WARNING
+         when not elevated; the script does NOT throw for them in the
+         non-elevated path. The pretty domain is finished later via the
+         in-app "Repair local URL setup" banner (KAN-294,
+         src/ui/localHttpsRepair.ts) which fires a single UAC prompt
+         from the running app. So we intentionally do NOT elevate here.
+
+         Sequencing:
+           * SetProperty builds the command line (deferred CAs cannot
+             read [INSTALLDIR]/[LocalAppDataFolder] at execution time, so
+             we resolve them now and stash the formatted string into the
+             property whose name == the deferred CA Id; MSI surfaces it
+             as CustomActionData).
+           * The CA runs deferred + impersonated, AFTER InstallFiles,
+             only on install/upgrade (NOT REMOVE), and Return="ignore"
+             so an expected non-elevated hosts/cert warning (or a
+             transient tray relaunch hiccup) never aborts an otherwise
+             good install. A genuine hard failure is logged but the file
+             payload is already in place and the operator can relaunch
+             from the Start Menu shortcut.
+
+         DataDir is passed explicitly and matches
+         install-release.ps1's Resolve-DefaultDataDir output for a
+         managed %LOCALAPPDATA% install, so the MSI, the scheduled task,
+         and the tray all agree on one data directory.
+
+         Silent auto-update (msiexec /quiet, run by check-update.ps1)
+         executes this same CA. That is fine and intended: it is
+         per-user (no UAC), install-release.ps1 is idempotent, single-
+         instances the tray (Stop-ExistingTrayControllers before
+         -StartTray), and ends with a running tray — so a quiet update
+         self-heals the runtime without any interactive prompt.
+         =================================================================== -->
+    <SetProperty Id="RunAgentProvisioning"
+                 Before="RunAgentProvisioning"
+                 Sequence="execute"
+                 Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File &quot;[INSTALLDIR]scripts\install-release.ps1&quot; -DataDir &quot;[LocalAppDataFolder]Dhruvanta Systems\PrintAnywhereAgent\data&quot; -Port 43100 -RegisterStartupTask -CreateShortcuts -StartTray" />
+
+    <CustomAction Id="RunAgentProvisioning"
+                  BinaryRef="Wix4UtilCA_X86"
+                  DllEntry="WixQuietExec64"
+                  Execute="deferred"
+                  Impersonate="yes"
+                  Return="ignore" />
+
+    <!-- Status text in the wizard's progress page so the operator sees
+         the agent being configured/started instead of an apparent hang. -->
+    <ProgressText Action="RunAgentProvisioning">Configuring and starting PrintAnywhere Agent…</ProgressText>
+
+    <InstallExecuteSequence>
+      <Custom Action="RunAgentProvisioning" After="InstallFiles" Condition="NOT REMOVE" />
+    </InstallExecuteSequence>
 
     <!-- WixUI_Minimal wizard: License -> "Install" -> Finish. No
          install-directory picker - this is a per-user MSI pinned to
