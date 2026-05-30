@@ -109,6 +109,18 @@
     <Property Id="ARPCONTACT" Value="support@dhruvantasystems.com" />
     <Property Id="ARPHELPLINK" Value="https://printanywhere.dhruvantasystems.com/" />
 
+    <!-- KAN-425: Add/Remove Programs icon. <Icon> EMBEDS the file into
+         the MSI itself (it is not a runtime payload file), so it only
+         needs a path that exists at WiX compile time. Point at the
+         committed repo-root assets icon, relative to this .wixproj dir
+         (native-shell/PrintAnywhereAgent.Installer/ -> ..\..\assets),
+         rather than the staged payload — build-native-tray.mjs does NOT
+         copy any .ico into the payload, so the old
+         $(var.PayloadSource)\dhruvanta-agent.ico never existed on the
+         CI runner (WIX0103). -->
+    <Icon Id="PrintAnywhereAgent.ico" SourceFile="..\..\assets\dhruvanta-agent.ico" />
+    <Property Id="ARPPRODUCTICON" Value="PrintAnywhereAgent.ico" />
+
     <Feature Id="MainFeature"
              Title="PrintAnywhere Agent"
              Level="1"
@@ -124,11 +136,93 @@
       <ComponentGroupRef Id="PayloadComponents" />
     </Feature>
 
+    <!-- ===================================================================
+         KAN-425: per-user provisioning CustomAction.
+
+         PRIMARY FIX for the v0.1.37 symptom (operator installed the MSI
+         and saw nothing for ~5 min: no tray icon, no Add/Remove entry,
+         the local UI never loaded). Root cause: the MSI laid the files
+         down but NOTHING ever ran install-release.ps1, so the per-user
+         setup (tray launch, runtime start on 127.0.0.1:43100, logon
+         autostart, shortcuts) never happened.
+
+         This deferred, IMPERSONATED CustomAction runs the bundled
+         install-release.ps1 as the installing user (NO elevation — this
+         is a perUser MSI) right after the files are committed. It does
+         ONLY the per-user steps, all of which need no admin:
+           * launches the tray (-StartTray) -> tray icon appears
+           * starts the agent runtime -> https://127.0.0.1:43100 serves
+           * registers logon autostart (-RegisterStartupTask)
+           * creates Desktop / Start Menu shortcuts (-CreateShortcuts)
+
+         The two admin-only bits inside install-release.ps1 (hosts-file
+         entry + cert trust for the pretty domain
+         local.printanywhere.dhruvantasystems.com) DEGRADE TO A WARNING
+         when not elevated; the script does NOT throw for them in the
+         non-elevated path. The pretty domain is finished later via the
+         in-app "Repair local URL setup" banner (KAN-294,
+         src/ui/localHttpsRepair.ts) which fires a single UAC prompt
+         from the running app. So we intentionally do NOT elevate here.
+
+         Sequencing:
+           * SetProperty builds the command line (deferred CAs cannot
+             read [INSTALLDIR]/[LocalAppDataFolder] at execution time, so
+             we resolve them now and stash the formatted string into the
+             property whose name == the deferred CA Id; MSI surfaces it
+             as CustomActionData).
+           * The CA runs deferred + impersonated, AFTER InstallFiles,
+             only on install/upgrade (NOT REMOVE), and Return="ignore"
+             so an expected non-elevated hosts/cert warning (or a
+             transient tray relaunch hiccup) never aborts an otherwise
+             good install. A genuine hard failure is logged but the file
+             payload is already in place and the operator can relaunch
+             from the Start Menu shortcut.
+
+         DataDir is passed explicitly and matches
+         install-release.ps1's Resolve-DefaultDataDir output for a
+         managed %LOCALAPPDATA% install, so the MSI, the scheduled task,
+         and the tray all agree on one data directory.
+
+         Silent auto-update (msiexec /quiet, run by check-update.ps1)
+         executes this same CA. That is fine and intended: it is
+         per-user (no UAC), install-release.ps1 is idempotent, single-
+         instances the tray (Stop-ExistingTrayControllers before
+         -StartTray), and ends with a running tray — so a quiet update
+         self-heals the runtime without any interactive prompt.
+         =================================================================== -->
+    <SetProperty Id="RunAgentProvisioning"
+                 Before="RunAgentProvisioning"
+                 Sequence="execute"
+                 Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File &quot;[INSTALLDIR]scripts\install-release.ps1&quot; -DataDir &quot;[LocalAppDataFolder]Dhruvanta Systems\PrintAnywhereAgent\data&quot; -Port 43100 -RegisterStartupTask -CreateShortcuts -StartTray" />
+
+    <!-- BinaryRef MUST use the arch-suffixed preprocessor variable; a
+         hardcoded literal (e.g. Wix4UtilCA_X86) fails the WiX link with
+         "The identifier 'Binary:Wix4UtilCA_X86' could not be found" when
+         the package builds for a different arch. $(sys.BUILDARCHSHORT)
+         resolves to the matching emitted util-CA binary id. -->
+    <CustomAction Id="RunAgentProvisioning"
+                  BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)"
+                  DllEntry="WixQuietExec64"
+                  Execute="deferred"
+                  Impersonate="yes"
+                  Return="ignore" />
+
+
+    <InstallExecuteSequence>
+      <Custom Action="RunAgentProvisioning" After="InstallFiles" Condition="NOT REMOVE" />
+    </InstallExecuteSequence>
+
     <!-- WixUI_Minimal wizard: License -> "Install" -> Finish. No
          install-directory picker - this is a per-user MSI pinned to
          %LOCALAPPDATA%, the operator can't choose. License text
          comes from License.rtf next to this wxs. -->
     <ui:WixUI Id="WixUI_Minimal" />
+    <!-- KAN-425: progress-page status text. WiX v5 requires ProgressText
+         to be a child of <UI> (not <Package> directly), so it lives in this
+         standalone <UI> which merges with the WixUI_Minimal dialog set above. -->
+    <UI>
+      <ProgressText Action="RunAgentProvisioning" Message="Configuring and starting PrintAnywhere Agent..." />
+    </UI>
     <WixVariable Id="WixUILicenseRtf" Value="License.rtf" />
 
   </Package>
