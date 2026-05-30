@@ -217,9 +217,12 @@ Release installs also restrict the local install/config/data folders to the curr
 
 ## Docs
 
+- [docs/download-and-verify.md](./docs/download-and-verify.md) where to download and how to verify the checksum + Authenticode signature before installing
 - [docs/windows-setup.md](./docs/windows-setup.md) operator setup and pairing guide
 - [docs/operator-approval-and-recovery.md](./docs/operator-approval-and-recovery.md) approval-first onboarding, ownership boundaries, soft disable, and recovery flows
 - [docs/release-build.md](./docs/release-build.md) release bundle build process and artifact layout
+- [docs/code-signing.md](./docs/code-signing.md) how releases are code-signed, timestamped, and verified in CI
+- [SECURITY.md](./SECURITY.md) release-integrity guarantees and how to report a vulnerability
 
 ## Backend Contract
 
