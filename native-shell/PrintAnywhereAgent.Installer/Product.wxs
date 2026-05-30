@@ -191,8 +191,13 @@
                  Sequence="execute"
                  Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File &quot;[INSTALLDIR]scripts\install-release.ps1&quot; -DataDir &quot;[LocalAppDataFolder]Dhruvanta Systems\PrintAnywhereAgent\data&quot; -Port 43100 -RegisterStartupTask -CreateShortcuts -StartTray" />
 
+    <!-- BinaryRef MUST use the arch-suffixed preprocessor variable; a
+         hardcoded literal (e.g. Wix4UtilCA_X86) fails the WiX link with
+         "The identifier 'Binary:Wix4UtilCA_X86' could not be found" when
+         the package builds for a different arch. $(sys.BUILDARCHSHORT)
+         resolves to the matching emitted util-CA binary id. -->
     <CustomAction Id="RunAgentProvisioning"
-                  BinaryRef="Wix4UtilCA_X86"
+                  BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)"
                   DllEntry="WixQuietExec64"
                   Execute="deferred"
                   Impersonate="yes"
