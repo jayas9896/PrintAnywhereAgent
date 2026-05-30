@@ -3,9 +3,13 @@ using System.Collections.Generic;
 using System.IO;
 using System.Net.Http;
 using System.Net.Http.Json;
+using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -131,7 +135,193 @@ public sealed class UpdateService : IDisposable
         await DownloadAsync(result.ChecksumAsset.BrowserDownloadUrl, checksumPath, null, null, cancel).ConfigureAwait(false);
 
         VerifyChecksum(setupPath, checksumPath, result.SetupAsset.Name);
+
+        // KAN-431 S1 — Authenticode publisher gate. The SHA-256 check above
+        // only proves the download matches the SHA256SUMS.txt that came from
+        // the SAME release; it does not prove WHO produced the release. This
+        // layered check requires the installer to carry a valid, fully
+        // chained Authenticode signature whose certificate Organization is
+        // our exact legal name. It runs AFTER (never instead of) the SHA-256
+        // check and BEFORE the path is returned to the caller that hands it
+        // to msiexec — so a tampered/unsigned/foreign-signed installer aborts
+        // the update before any code runs.
+        //
+        // FAIL-CLOSED posture: if a future release is ever published UNSIGNED
+        // (e.g. the eSigner ES_* secrets are removed and release.yml takes its
+        // graceful-skip path), WinVerifyTrust returns TRUST_E_NOSIGNATURE and
+        // this gate REJECTS the update. S1 clients then correctly refuse to
+        // auto-update until a properly signed release is cut again. That is
+        // the intended, safe behaviour.
+        VerifyAuthenticodePublisher(setupPath);
+
         return setupPath;
+    }
+
+    /// <summary>
+    /// KAN-431 S1 — requires the installer at <paramref name="setupPath"/>
+    /// to be Authenticode-signed with (1) a valid signature chained to a
+    /// trusted root with whole-chain revocation checking, AND (2) a signing
+    /// certificate whose Organization (<c>O=</c>) RDN equals
+    /// <see cref="AgentConstants.ExpectedSigningPublisherO"/> verbatim.
+    /// Throws <see cref="InvalidOperationException"/> if either fails.
+    ///
+    /// A timestamped signature stays valid past the signing certificate's
+    /// expiry, so there is deliberately NO manual expiry rejection here —
+    /// WinVerifyTrust + the embedded timestamp handle lifetime correctly.
+    /// </summary>
+    [SupportedOSPlatform("windows")]
+    private static void VerifyAuthenticodePublisher(string setupPath)
+    {
+        // (1) Signature + chain validity via WinVerifyTrust.
+        int trust = WinVerifyTrustFile(setupPath);
+        if (trust != 0)
+        {
+            throw new InvalidOperationException(
+                "Update rejected: installer is not signed by "
+                + $"{AgentConstants.ExpectedSigningPublisherO} "
+                + $"(Authenticode chain verification failed, WinVerifyTrust=0x{trust:X8}).");
+        }
+
+        // (2) Publisher Organization (O=) RDN must match our legal name.
+        string organization;
+        try
+        {
+            using var basic = X509Certificate.CreateFromSignedFile(setupPath);
+            using var cert = new X509Certificate2(basic);
+            organization = ExtractOrganization(cert);
+        }
+        catch (Exception ex) when (ex is not InvalidOperationException)
+        {
+            // No embedded cert / unreadable signature — treat as unsigned.
+            throw new InvalidOperationException(
+                "Update rejected: installer is not signed by "
+                + $"{AgentConstants.ExpectedSigningPublisherO} "
+                + "(publisher certificate could not be read).", ex);
+        }
+
+        if (!string.Equals(organization, AgentConstants.ExpectedSigningPublisherO, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Update rejected: installer is not signed by "
+                + $"{AgentConstants.ExpectedSigningPublisherO} "
+                + $"(publisher Organization was '{organization}').");
+        }
+    }
+
+    /// <summary>
+    /// Extracts the Organization (<c>O=</c>) RDN from the certificate
+    /// subject. The subject is a single DN string whose RDN values can in
+    /// principle contain commas, so we do NOT naively split on ','; we match
+    /// the <c>O=</c> component specifically. Returns an empty string if no
+    /// <c>O=</c> RDN is present (which then fails the exact-match gate).
+    /// </summary>
+    private static string ExtractOrganization(X509Certificate2 cert)
+    {
+        // Subject is e.g.
+        //   "CN=Dhruvanta Systems Private Limited, O=Dhruvanta Systems Private Limited, L=Warangal, S=Telangana, C=IN"
+        // Match the O= RDN at string start or after a comma+optional space.
+        var match = Regex.Match(
+            cert.Subject,
+            @"(?:^|,\s*)O=(?<org>[^,]+)",
+            RegexOptions.IgnoreCase);
+        return match.Success ? match.Groups["org"].Value.Trim() : string.Empty;
+    }
+
+    // ---- WinVerifyTrust P/Invoke (KAN-431 S1) -------------------------------
+
+    private static readonly Guid WINTRUST_ACTION_GENERIC_VERIFY_V2 =
+        new("00AAC56B-CD44-11D0-8CC2-00C04FC295EE");
+
+    private const uint WTD_UI_NONE = 2;
+    private const uint WTD_REVOKE_WHOLECHAIN = 1;
+    private const uint WTD_CHOICE_FILE = 1;
+    private const uint WTD_STATEACTION_VERIFY = 1;
+    private const uint WTD_STATEACTION_CLOSE = 2;
+
+    [StructLayout(LayoutKind.Sequential, Pack = 8)]
+    private struct WINTRUST_FILE_INFO
+    {
+        public uint cbStruct;
+        [MarshalAs(UnmanagedType.LPWStr)] public string pcwszFilePath;
+        public IntPtr hFile;
+        public IntPtr pgKnownSubject;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 8)]
+    private struct WINTRUST_DATA
+    {
+        public uint cbStruct;
+        public IntPtr pPolicyCallbackData;
+        public IntPtr pSIPClientData;
+        public uint dwUIChoice;
+        public uint fdwRevocationChecks;
+        public uint dwUnionChoice;
+        public IntPtr pFile;
+        public uint dwStateAction;
+        public IntPtr hWVTStateData;
+        [MarshalAs(UnmanagedType.LPWStr)] public string pwszURLReference;
+        public uint dwProvFlags;
+        public uint dwUIContext;
+        public IntPtr pSignatureSettings;
+    }
+
+    [DllImport("wintrust.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = false)]
+    private static extern int WinVerifyTrust(IntPtr hwnd, ref Guid pgActionID, ref WINTRUST_DATA pWVTData);
+
+    /// <summary>
+    /// Runs <c>WinVerifyTrust</c> with
+    /// <c>WINTRUST_ACTION_GENERIC_VERIFY_V2</c> over the file. Returns the
+    /// trust verdict from the VERIFY call (0 = ERROR_SUCCESS = trusted; any
+    /// other value is a HRESULT such as TRUST_E_NOSIGNATURE 0x800B0100 or
+    /// CERT_E_UNTRUSTEDROOT 0x800B0111). The state allocated by the VERIFY
+    /// call is always freed by a paired CLOSE call.
+    /// </summary>
+    [SupportedOSPlatform("windows")]
+    private static int WinVerifyTrustFile(string filePath)
+    {
+        var fileInfo = new WINTRUST_FILE_INFO
+        {
+            cbStruct = (uint)Marshal.SizeOf<WINTRUST_FILE_INFO>(),
+            pcwszFilePath = filePath,
+            hFile = IntPtr.Zero,
+            pgKnownSubject = IntPtr.Zero,
+        };
+
+        IntPtr pFile = Marshal.AllocHGlobal(Marshal.SizeOf<WINTRUST_FILE_INFO>());
+        Marshal.StructureToPtr(fileInfo, pFile, false);
+
+        var data = new WINTRUST_DATA
+        {
+            cbStruct = (uint)Marshal.SizeOf<WINTRUST_DATA>(),
+            pPolicyCallbackData = IntPtr.Zero,
+            pSIPClientData = IntPtr.Zero,
+            dwUIChoice = WTD_UI_NONE,
+            fdwRevocationChecks = WTD_REVOKE_WHOLECHAIN,
+            dwUnionChoice = WTD_CHOICE_FILE,
+            pFile = pFile,
+            dwStateAction = WTD_STATEACTION_VERIFY,
+            hWVTStateData = IntPtr.Zero,
+            pwszURLReference = null!,
+            dwProvFlags = 0,
+            dwUIContext = 0,
+            pSignatureSettings = IntPtr.Zero,
+        };
+
+        Guid action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+        try
+        {
+            int verdict = WinVerifyTrust(IntPtr.Zero, ref action, ref data);
+            return verdict;
+        }
+        finally
+        {
+            // Free the state allocated by the VERIFY call — same struct,
+            // CLOSE action — then release the unmanaged file-info block.
+            data.dwStateAction = WTD_STATEACTION_CLOSE;
+            WinVerifyTrust(IntPtr.Zero, ref action, ref data);
+            Marshal.DestroyStructure<WINTRUST_FILE_INFO>(pFile);
+            Marshal.FreeHGlobal(pFile);
+        }
     }
 
     public Task RunSilentInstallAsync(string setupPath, CancellationToken cancel = default)

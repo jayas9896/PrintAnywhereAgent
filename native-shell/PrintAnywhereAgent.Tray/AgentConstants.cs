@@ -38,4 +38,17 @@ internal static class AgentConstants
     /// contract in <c>src/config/defaults.ts</c>.
     /// </summary>
     public const string AgentPublisher = "Dhruvanta Systems";
+
+    /// <summary>
+    /// KAN-431 S1 — the EXACT Organization (<c>O=</c>) RDN that the
+    /// auto-updater requires on the downloaded installer's Authenticode
+    /// signing certificate. This is the company's full LEGAL name as it
+    /// appears on the SSL.com code-signing certificate
+    /// (<c>O=Dhruvanta Systems Private Limited</c>), which is deliberately
+    /// DIFFERENT from <see cref="AgentPublisher"/> ("Dhruvanta Systems",
+    /// the product/manufacturer display string used by Product.wxs and the
+    /// Node defaults). Do NOT collapse the two — the cert O= must match
+    /// this verbatim or the update is rejected before msiexec runs.
+    /// </summary>
+    public const string ExpectedSigningPublisherO = "Dhruvanta Systems Private Limited";
 }
