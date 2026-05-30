@@ -158,6 +158,20 @@ jobs:
         shell: bash
         run: echo "::notice title=VirusTotal::VT_API_KEY not configured — skipping pre-publish VirusTotal scan (KAN-449 follow-up). Add a VT_API_KEY repo secret to enable."
 
+      # KAN-450: also publish a STABLE-named copy of the signed installer so the
+      # website can link a permanent URL
+      # (…/releases/latest/download/PrintAnywhereSetup.exe) that always resolves
+      # to the current GA. Byte-identical to the versioned setup.exe (same
+      # Authenticode signature + hash); the versioned name stays for traceability.
+      - name: Stage stable-named installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd artifacts
+          cp "printanywhere-agent-v${{ steps.version.outputs.version }}-setup.exe" PrintAnywhereSetup.exe
+          sha256sum PrintAnywhereSetup.exe >> SHA256SUMS.txt
+          echo "Staged stable-named PrintAnywhereSetup.exe (same bytes as the signed versioned setup.exe)."
+
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -165,6 +179,7 @@ jobs:
           gh release create "${{ github.ref_name }}" \
             "artifacts/printanywhere-agent-v${{ steps.version.outputs.version }}.zip" \
             "artifacts/printanywhere-agent-v${{ steps.version.outputs.version }}-setup.exe" \
+            "artifacts/PrintAnywhereSetup.exe" \
             "artifacts/SHA256SUMS.txt" \
             --title "PrintAnywhere Agent ${{ github.ref_name }}" \
             --generate-notes
@@ -346,4 +361,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload "${{ github.ref_name }}" "${{ steps.msi.outputs.path }}" --clobber
+          # KAN-450: upload the versioned MSI (traceability) AND a stable-named
+          # copy so the website can link a permanent URL
+          # (…/releases/latest/download/PrintAnywhereAgent.msi). Byte-identical
+          # to the signed versioned MSI.
+          $stable = Join-Path (Split-Path "${{ steps.msi.outputs.path }}") "PrintAnywhereAgent.msi"
+          Copy-Item "${{ steps.msi.outputs.path }}" $stable -Force
+          gh release upload "${{ github.ref_name }}" "${{ steps.msi.outputs.path }}" "$stable" --clobber
