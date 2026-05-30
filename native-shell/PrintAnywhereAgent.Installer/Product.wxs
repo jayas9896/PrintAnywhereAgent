@@ -217,7 +217,7 @@
          to be a child of <UI> (not <Package> directly), so it lives in this
          standalone <UI> which merges with the WixUI_Minimal dialog set above. -->
     <UI>
-      <ProgressText Action="RunAgentProvisioning">Configuring and starting PrintAnywhere Agent…</ProgressText>
+      <ProgressText Action="RunAgentProvisioning" Message="Configuring and starting PrintAnywhere Agent..." />
     </UI>
     <WixVariable Id="WixUILicenseRtf" Value="License.rtf" />
 
