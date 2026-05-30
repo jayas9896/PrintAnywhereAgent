@@ -203,9 +203,6 @@
                   Impersonate="yes"
                   Return="ignore" />
 
-    <!-- Status text in the wizard's progress page so the operator sees
-         the agent being configured/started instead of an apparent hang. -->
-    <ProgressText Action="RunAgentProvisioning">Configuring and starting PrintAnywhere Agent…</ProgressText>
 
     <InstallExecuteSequence>
       <Custom Action="RunAgentProvisioning" After="InstallFiles" Condition="NOT REMOVE" />
@@ -216,6 +213,12 @@
          %LOCALAPPDATA%, the operator can't choose. License text
          comes from License.rtf next to this wxs. -->
     <ui:WixUI Id="WixUI_Minimal" />
+    <!-- KAN-425: progress-page status text. WiX v5 requires ProgressText
+         to be a child of <UI> (not <Package> directly), so it lives in this
+         standalone <UI> which merges with the WixUI_Minimal dialog set above. -->
+    <UI>
+      <ProgressText Action="RunAgentProvisioning">Configuring and starting PrintAnywhere Agent…</ProgressText>
+    </UI>
     <WixVariable Id="WixUILicenseRtf" Value="License.rtf" />
 
   </Package>
