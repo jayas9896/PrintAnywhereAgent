@@ -109,12 +109,15 @@
     <Property Id="ARPCONTACT" Value="support@dhruvantasystems.com" />
     <Property Id="ARPHELPLINK" Value="https://printanywhere.dhruvantasystems.com/" />
 
-    <!-- KAN-425: Add/Remove Programs icon. The native tray publish
-         step (build-native-tray.mjs) copies assets/dhruvanta-agent.ico
-         into the staged payload root, so it is present at
-         $(var.PayloadSource)\dhruvanta-agent.ico at WiX compile time
-         AND ships to [INSTALLDIR]dhruvanta-agent.ico at runtime. -->
-    <Icon Id="PrintAnywhereAgent.ico" SourceFile="$(var.PayloadSource)\dhruvanta-agent.ico" />
+    <!-- KAN-425: Add/Remove Programs icon. <Icon> EMBEDS the file into
+         the MSI itself (it is not a runtime payload file), so it only
+         needs a path that exists at WiX compile time. Point at the
+         committed tray resource icon (relative to this .wixproj dir,
+         same basis as the License.rtf reference below) rather than the
+         staged payload — build-native-tray.mjs does NOT copy any .ico
+         into the payload, so $(var.PayloadSource)\dhruvanta-agent.ico
+         never existed on the CI runner (WIX0103). -->
+    <Icon Id="PrintAnywhereAgent.ico" SourceFile="..\PrintAnywhereAgent.Tray\Resources\dhruvanta-agent.ico" />
     <Property Id="ARPPRODUCTICON" Value="PrintAnywhereAgent.ico" />
 
     <Feature Id="MainFeature"
