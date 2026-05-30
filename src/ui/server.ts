@@ -1741,7 +1741,7 @@ export function renderTrustPanel() {
     {
       icon: '🏢',
       title: 'Published by Dhruvanta Systems',
-      text: 'PrintAnywhere is built and supported by Dhruvanta Systems. Questions? Contact support@printanywhere.in.',
+      text: 'PrintAnywhere is built and supported by Dhruvanta Systems. Questions? Contact support@dhruvantasystems.com.',
     },
   ]
   return `<div class="card">
@@ -4664,7 +4664,7 @@ export async function startUiServer(runtime: AgentRuntime) {
         <div class="card-title">PrintAnywhere platform support</div>
         <p class="muted small">For platform-level issues (account approval, billing, API errors), contact Dhruvanta Systems.</p>
         <div style="margin-top:12px; display:flex; flex-direction:column; gap:6px;">
-          <div><strong>Email:</strong> support@printanywhere.in</div>
+          <div><strong>Email:</strong> support@dhruvantasystems.com</div>
           <div><strong>Platform:</strong> PrintAnywhere by Dhruvanta Systems</div>
         </div>
       </div>
@@ -4835,7 +4835,7 @@ export async function startUiServer(runtime: AgentRuntime) {
           </div>
         </div>
         <p class="muted small" style="line-height:1.6;">PrintAnywhere is a product by Dhruvanta Systems. The agent software connects your local Windows print shop to the PrintAnywhere cloud, enabling remote print job submission, secure job delivery, and in-store pickup with a pickup code.</p>
-        <p class="muted small" style="margin-top:8px; line-height:1.6;">For support or licensing questions, contact <a href="mailto:support@printanywhere.in">support@printanywhere.in</a>.</p>
+        <p class="muted small" style="margin-top:8px; line-height:1.6;">For support or licensing questions, contact <a href="mailto:support@dhruvantasystems.com">support@dhruvantasystems.com</a>.</p>
       </div>
     `
 
