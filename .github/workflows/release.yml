@@ -21,6 +21,18 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # KAN-449 (trust): a tagged release is a TRUST release — it must be
+      # signed. Fail fast if the SSL.com eSigner secrets are absent rather
+      # than warn-and-publish an unsigned installer (the old behaviour).
+      - name: Require code-signing secrets
+        shell: bash
+        run: |
+          if [ -z "${ES_USERNAME}" ]; then
+            echo "::error title=Unsigned release blocked::Code-signing secrets (ES_USERNAME/ES_PASSWORD/ES_CREDENTIAL_ID/ES_TOTP_SECRET) are not configured. A tagged trust release must be code-signed before publishing." >&2
+            exit 1
+          fi
+          echo "Code-signing secrets present — release will be signed."
+
       - uses: actions/setup-node@v6
         with:
           node-version: '22'
@@ -50,7 +62,6 @@ jobs:
       # CodeSignTool (eSigner) is Java-based and runs on ubuntu-latest.
       # Skips gracefully when the ES_* secrets are not configured.
       - name: Sign setup.exe with SSL.com eSigner
-        if: ${{ env.ES_USERNAME != '' }}
         uses: sslcom/esigner-codesign@develop
         with:
           command: sign
@@ -67,7 +78,6 @@ jobs:
       # (other lines stay intact). Line format must match the build scripts:
       # "<digest>  <basename>" (two spaces, bare basename, no path).
       - name: Refresh SHA256SUMS.txt for signed setup.exe
-        if: ${{ env.ES_USERNAME != '' }}
         shell: bash
         run: |
           cd artifacts
@@ -83,14 +93,24 @@ jobs:
           echo "Refreshed SHA256SUMS.txt:"
           cat SHA256SUMS.txt
 
-      - name: Code-signing summary (setup.exe)
+      # KAN-449 (trust): assert — don't assume — that setup.exe is actually
+      # Authenticode-signed AND RFC3161-timestamped. Timestamping preserves
+      # trust after the cert expires; an un-timestamped signature is a latent
+      # failure. Fails the release if verification does not pass.
+      - name: Verify setup.exe is signed + timestamped
         shell: bash
         run: |
-          if [ -n "${ES_USERNAME}" ]; then
-            echo "::notice title=Code signing::setup.exe SIGNED with SSL.com eSigner; SHA256SUMS refreshed for signed bytes."
-          else
-            echo "::warning title=Code signing::ES_* secrets not set — setup.exe is UNSIGNED (release still published)."
-          fi
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq osslsigncode
+          exe="artifacts/printanywhere-agent-v${{ steps.version.outputs.version }}-setup.exe"
+          out=$(osslsigncode verify -in "$exe" 2>&1) || {
+            echo "$out"; echo "::error title=Signature check failed::setup.exe failed osslsigncode verification (not signed or chain invalid)." >&2; exit 1; }
+          echo "$out"
+          echo "$out" | grep -qiE "Signature verification: ok" || {
+            echo "::error title=Signature check failed::setup.exe signature did not verify OK." >&2; exit 1; }
+          echo "$out" | grep -qiE "timestamp|signing time" || {
+            echo "::error title=No timestamp::setup.exe is signed but NOT RFC3161-timestamped." >&2; exit 1; }
+          echo "::notice title=Code signing::setup.exe verified SIGNED + TIMESTAMPED."
 
       - name: Create GitHub release
         env:
@@ -134,6 +154,17 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # KAN-449 (trust): the MSI + the inner native EXE must be signed.
+      # Fail fast if signing secrets are absent instead of shipping unsigned.
+      - name: Require code-signing secrets
+        shell: pwsh
+        run: |
+          if (-not $env:ES_USERNAME) {
+            Write-Host "::error title=Unsigned release blocked::Code-signing secrets (ES_*) are not configured. The MSI and inner EXE must be signed before publishing a tagged trust release."
+            exit 1
+          }
+          Write-Host "Code-signing secrets present — MSI and inner EXE will be signed."
+
       - name: Set up .NET 8
         uses: actions/setup-dotnet@v5
         with:
@@ -167,6 +198,39 @@ jobs:
       - name: Build native tray EXE
         shell: pwsh
         run: node scripts/build-native-tray.mjs
+
+      # KAN-449 (trust, point 6): sign the inner native tray EXE BEFORE it is
+      # harvested into the MSI. Previously only the outer MSI/setup.exe were
+      # signed, so the EXE the user actually runs shipped UNSIGNED inside a
+      # signed MSI — SmartScreen/Defender can flag it at first launch.
+      - name: Sign native tray EXE with SSL.com eSigner
+        uses: sslcom/esigner-codesign@develop
+        with:
+          command: sign
+          username: ${{ secrets.ES_USERNAME }}
+          password: ${{ secrets.ES_PASSWORD }}
+          credential_id: ${{ secrets.ES_CREDENTIAL_ID }}
+          totp_secret: ${{ secrets.ES_TOTP_SECRET }}
+          file_path: ${{ github.workspace }}/artifacts/native-shell/PrintAnywhereAgent.exe
+          override: true
+          malware_block: false
+
+      - name: Verify native tray EXE is signed + timestamped
+        shell: pwsh
+        run: |
+          $path = "artifacts/native-shell/PrintAnywhereAgent.exe"
+          $sig = Get-AuthenticodeSignature -FilePath $path
+          if ($sig.Status -ne 'Valid') {
+            Write-Host "::error title=Inner EXE signature invalid::Status=$($sig.Status) — $($sig.StatusMessage)"
+            exit 1
+          }
+          if (-not $sig.SignerCertificate) {
+            Write-Host "::error title=Inner EXE unsigned::No signer certificate on PrintAnywhereAgent.exe"; exit 1
+          }
+          if (-not $sig.TimeStamperCertificate) {
+            Write-Host "::error title=Inner EXE not timestamped::No RFC3161 timestamp on PrintAnywhereAgent.exe"; exit 1
+          }
+          Write-Host "::notice title=Code signing::Inner EXE signed by '$($sig.SignerCertificate.Subject)', timestamped by '$($sig.TimeStamperCertificate.Subject)'."
 
       - name: Stage native EXE into MSI payload
         shell: pwsh
@@ -202,7 +266,6 @@ jobs:
       # Sign the MSI in place BEFORE it is uploaded to the release.
       # Skips gracefully when the ES_* secrets are not configured.
       - name: Sign MSI with SSL.com eSigner
-        if: ${{ env.ES_USERNAME != '' }}
         uses: sslcom/esigner-codesign@develop
         with:
           command: sign
@@ -214,14 +277,23 @@ jobs:
           override: true
           malware_block: false
 
-      - name: Code-signing summary (MSI)
+      # KAN-449 (trust): assert the MSI is signed + timestamped before upload.
+      - name: Verify MSI is signed + timestamped
         shell: pwsh
         run: |
-          if ($env:ES_USERNAME) {
-            Write-Host "::notice title=Code signing::MSI SIGNED with SSL.com eSigner before upload."
-          } else {
-            Write-Host "::warning title=Code signing::ES_* secrets not set — MSI is UNSIGNED (still uploaded)."
+          $path = "${{ steps.msi.outputs.path }}"
+          $sig = Get-AuthenticodeSignature -FilePath $path
+          if ($sig.Status -ne 'Valid') {
+            Write-Host "::error title=MSI signature invalid::Status=$($sig.Status) — $($sig.StatusMessage)"
+            exit 1
           }
+          if (-not $sig.SignerCertificate) {
+            Write-Host "::error title=MSI unsigned::No signer certificate on the MSI"; exit 1
+          }
+          if (-not $sig.TimeStamperCertificate) {
+            Write-Host "::error title=MSI not timestamped::No RFC3161 timestamp on the MSI"; exit 1
+          }
+          Write-Host "::notice title=Code signing::MSI signed by '$($sig.SignerCertificate.Subject)', timestamped by '$($sig.TimeStamperCertificate.Subject)'."
 
       - name: Upload MSI to the GitHub release
         shell: pwsh
