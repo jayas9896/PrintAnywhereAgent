@@ -1,14 +1,23 @@
 # Code signing
 
-PrintAnywhere Agent ships two Windows release artifacts that are Authenticode
-signed before publication:
+PrintAnywhere Agent Authenticode-signs **every** Windows binary it ships, before
+publication:
 
-- `artifacts/printanywhere-agent-v<ver>-setup.exe` (built in the `release` job)
-- `PrintAnywhereAgent-<ver>.msi` (built in the `windows-installer` job)
+- `artifacts/printanywhere-agent-v<ver>-setup.exe` — the zip-path installer (`release` job)
+- `artifacts/native-shell/PrintAnywhereAgent.exe` — the native tray EXE the user
+  actually runs, signed **before** it is harvested into the MSI (`windows-installer` job)
+- `PrintAnywhereAgent-<ver>.msi` — the MSI installer (`windows-installer` job)
 
 Signing happens **before** `SHA256SUMS.txt` is finalized and before the artifacts
 are uploaded to the GitHub release, so the published checksum always matches the
 signed bytes.
+
+Every signed artifact is then **verified in CI** — the workflow asserts a valid
+Authenticode signature **and** an RFC3161 timestamp (`Get-AuthenticodeSignature`
+on Windows; `osslsigncode verify` for the Linux-built `setup.exe`). RFC3161
+timestamping is what preserves trust after the certificate expires, so an
+un-timestamped signature is treated as a failure. If any binary fails to verify,
+the release is **blocked** (not published).
 
 ## eSigner cloud signing (production, CI)
 
@@ -31,14 +40,17 @@ Values come from your SSL.com account / eSigner enrollment:
 | `ES_TOTP_SECRET`    | eSigner TOTP/automation secret (base32 string from SSL.com)  |
 
 Once all four secrets are present, every tag push matching `v*` produces a fully
-signed release. The signing steps are gated on `env.ES_USERNAME != ''`, so:
+signed release. A tagged release is a **trust release**, so signing is mandatory:
 
-- **Secrets present** → both artifacts are signed; `SHA256SUMS.txt` is recomputed
-  to reflect the signed `setup.exe`; release shows a `SIGNED` notice in the log.
-- **Secrets absent** → the signing steps skip cleanly and the release is published
-  unsigned (current pre-cert behavior). The build does **not** fail.
+- **Secrets present** → setup.exe, the inner native EXE, and the MSI are all
+  signed + timestamped; each is verified in CI; `SHA256SUMS.txt` is recomputed to
+  reflect the signed `setup.exe`; the release is published.
+- **Secrets absent** → the **`Require code-signing secrets` guard fails the
+  release immediately** (fail-fast, before the build). An unsigned installer is
+  never published. This replaced the previous warn-and-publish-unsigned behavior.
 
-The workflow log emits a clear `SIGNED` / `UNSIGNED` annotation for each artifact.
+The workflow log emits a `SIGNED + TIMESTAMPED` notice (with the signer + timestamp
+authority subjects) for each artifact, or a hard error that blocks the release.
 
 Secret values are never echoed; the eSigner action masks its own inputs and the
 summary step only reports the signed/unsigned state.
