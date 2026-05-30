@@ -112,12 +112,13 @@
     <!-- KAN-425: Add/Remove Programs icon. <Icon> EMBEDS the file into
          the MSI itself (it is not a runtime payload file), so it only
          needs a path that exists at WiX compile time. Point at the
-         committed tray resource icon (relative to this .wixproj dir,
-         same basis as the License.rtf reference below) rather than the
-         staged payload — build-native-tray.mjs does NOT copy any .ico
-         into the payload, so $(var.PayloadSource)\dhruvanta-agent.ico
-         never existed on the CI runner (WIX0103). -->
-    <Icon Id="PrintAnywhereAgent.ico" SourceFile="..\PrintAnywhereAgent.Tray\Resources\dhruvanta-agent.ico" />
+         committed repo-root assets icon, relative to this .wixproj dir
+         (native-shell/PrintAnywhereAgent.Installer/ -> ..\..\assets),
+         rather than the staged payload — build-native-tray.mjs does NOT
+         copy any .ico into the payload, so the old
+         $(var.PayloadSource)\dhruvanta-agent.ico never existed on the
+         CI runner (WIX0103). -->
+    <Icon Id="PrintAnywhereAgent.ico" SourceFile="..\..\assets\dhruvanta-agent.ico" />
     <Property Id="ARPPRODUCTICON" Value="PrintAnywhereAgent.ico" />
 
     <Feature Id="MainFeature"
