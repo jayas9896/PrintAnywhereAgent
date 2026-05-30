@@ -1,137 +1,59 @@
-# Windows Code Signing
+# Code signing
 
-Windows shows `Publisher: Unknown` when the setup executable is not
-Authenticode-signed. The version-resource `CompanyName` is already
-`Dhruvanta Systems`, but Windows installer trust uses the signing
-certificate, not that resource metadata.
+PrintAnywhere Agent ships two Windows release artifacts that are Authenticode
+signed before publication:
 
-To show `Dhruvanta Systems` as the publisher on customer machines, sign
-`printanywhere-agent-v<version>-setup.exe` with an OV or EV Windows
-code-signing certificate issued to Dhruvanta Systems. A self-signed
-certificate is acceptable only for an internal lab machine where the
-certificate is manually trusted; it does not give public customers a
-trusted publisher or SmartScreen reputation.
+- `artifacts/printanywhere-agent-v<ver>-setup.exe` (built in the `release` job)
+- `PrintAnywhereAgent-<ver>.msi` (built in the `windows-installer` job)
 
-For the current internal-testing release path, we also publish the
-self-signed public certificate and SHA-256 fingerprint beside the setup
-executable. This lets an operator verify that the `.exe` is signed by
-the same Dhruvanta-held self-signed key even though Windows still shows
-an untrusted or unknown publisher.
+Signing happens **before** `SHA256SUMS.txt` is finalized and before the artifacts
+are uploaded to the GitHub release, so the published checksum always matches the
+signed bytes.
 
-## Secret Placement
+## eSigner cloud signing (production, CI)
 
-Do not commit signing material. On this host, use:
+Releases are signed automatically by GitHub Actions using SSL.com's
+[eSigner cloud code signing](https://www.ssl.com/how-to/cloud-code-signing-integration-with-github-actions/)
+via the official [`sslcom/esigner-codesign`](https://github.com/SSLcom/esigner-codesign)
+action (CodeSignTool, `command: sign`). No certificate or private key material
+lives in the repo or on the runner — signing is performed in SSL.com's cloud HSM.
 
-```bash
-mkdir -p /home/jayas/.secrets/dhruvanta-code-signing
-chmod 700 /home/jayas/.secrets/dhruvanta-code-signing
+### Required GitHub Actions secrets
+
+Add these four repository secrets (Settings → Secrets and variables → Actions).
+Values come from your SSL.com account / eSigner enrollment:
+
+| Secret              | Source                                                        |
+| ------------------- | ------------------------------------------------------------ |
+| `ES_USERNAME`       | SSL.com account username                                     |
+| `ES_PASSWORD`       | SSL.com account password                                     |
+| `ES_CREDENTIAL_ID`  | eSigner credential ID for the OV code-signing certificate    |
+| `ES_TOTP_SECRET`    | eSigner TOTP/automation secret (base32 string from SSL.com)  |
+
+Once all four secrets are present, every tag push matching `v*` produces a fully
+signed release. The signing steps are gated on `env.ES_USERNAME != ''`, so:
+
+- **Secrets present** → both artifacts are signed; `SHA256SUMS.txt` is recomputed
+  to reflect the signed `setup.exe`; release shows a `SIGNED` notice in the log.
+- **Secrets absent** → the signing steps skip cleanly and the release is published
+  unsigned (current pre-cert behavior). The build does **not** fail.
+
+The workflow log emits a clear `SIGNED` / `UNSIGNED` annotation for each artifact.
+
+Secret values are never echoed; the eSigner action masks its own inputs and the
+summary step only reports the signed/unsigned state.
+
+## Local / lab PFX signing
+
+For local or lab builds where the eSigner cloud path is not available, the
+`scripts/sign-windows-installer.mjs` helper signs the `setup.exe` with a PFX
+file using `osslsigncode` / `signtool`. Point it at the certificate via the
+`PA_SIGN_PFX` environment variable:
+
+```sh
+PA_SIGN_PFX=/path/to/codesign.pfx node scripts/sign-windows-installer.mjs
 ```
 
-Place the certificate and password here:
-
-```text
-/home/jayas/.secrets/dhruvanta-code-signing/dhruvanta-systems-codesign.pfx
-/home/jayas/.secrets/dhruvanta-code-signing/dhruvanta-systems-codesign-password.txt
-```
-
-Then restrict both files:
-
-```bash
-chmod 600 /home/jayas/.secrets/dhruvanta-code-signing/dhruvanta-systems-codesign.pfx
-chmod 600 /home/jayas/.secrets/dhruvanta-code-signing/dhruvanta-systems-codesign-password.txt
-```
-
-## Release Build With Signing
-
-Set these env vars before building the Windows installer:
-
-```bash
-export PRINTANYWHERE_CODESIGN_PFX=/home/jayas/.secrets/dhruvanta-code-signing/dhruvanta-systems-codesign.pfx
-export PRINTANYWHERE_CODESIGN_PASSWORD_FILE=/home/jayas/.secrets/dhruvanta-code-signing/dhruvanta-systems-codesign-password.txt
-export PRINTANYWHERE_CODESIGN_STRICT=1
-export PRINTANYWHERE_CODESIGN_TIMESTAMP_URL=http://timestamp.digicert.com
-```
-
-Build:
-
-```bash
-npm run release:windows-installer
-```
-
-If the setup executable was already built, sign it and refresh the
-checksum manifest:
-
-```bash
-npm run release:sign-windows-installer
-```
-
-The signing script uses `osslsigncode` in WSL when available. On
-Windows, or when using the Windows SDK, set:
-
-```bash
-export PRINTANYWHERE_SIGNTOOL_PATH='/mnt/c/Program Files (x86)/Windows Kits/10/bin/<version>/x64/signtool.exe'
-```
-
-## Internal Self-Signed Certificate
-
-Use this only until an OV/EV certificate issued to Dhruvanta Systems is
-available.
-
-Generate or reuse the host-local self-signed key material:
-
-```bash
-npm run codesign:create-self-signed
-```
-
-The private key and PFX stay outside git under:
-
-```text
-/home/jayas/.secrets/dhruvanta-code-signing/self-signed/
-```
-
-Load the generated signing environment and build:
-
-```bash
-. /home/jayas/.secrets/dhruvanta-code-signing/self-signed/printanywhere-selfsigned-codesign.env
-npm run release:windows-installer
-```
-
-When a self-signed release is built successfully, `artifacts/` also
-contains:
-
-```text
-dhruvanta-systems-codesign-public.cer
-dhruvanta-systems-codesign-public.pem
-dhruvanta-systems-codesign-fingerprint.txt
-RELEASE-INTEGRITY.txt
-SHA256SUMS.txt
-```
-
-Upload those files with the setup executable. They are public
-verification material only; do not upload the PFX, private key, password
-file, or generated secret env file.
-
-## Verification
-
-On Windows:
-
-```powershell
-Get-AuthenticodeSignature .\artifacts\printanywhere-agent-v<version>-setup.exe | Format-List
-```
-
-For a self-signed release, compare the `SignerCertificate.Thumbprint`
-shown by PowerShell with the SHA-256 fingerprint published in
-`dhruvanta-systems-codesign-fingerprint.txt`. Also verify the setup
-executable hash against `SHA256SUMS.txt`.
-
-With Windows SDK:
-
-```powershell
-signtool verify /pa /v .\artifacts\printanywhere-agent-v<version>-setup.exe
-```
-
-Expected result after a real OV/EV certificate is used:
-
-- the signature status is valid
-- the signer certificate subject is Dhruvanta Systems
-- Windows UAC/SmartScreen no longer shows `Unknown publisher`
+The helper re-computes `artifacts/SHA256SUMS.txt` after signing so the local
+checksum matches the signed binary, mirroring the CI behavior. This path is for
+local/lab use only — production releases are signed by the eSigner CI flow above.
