@@ -1137,6 +1137,13 @@ const SHARED_CSS = `
   .card-link:hover { text-decoration: underline; }
   .subsection { border-top: 1px solid var(--border-light); padding-top: var(--space-4); margin-top: var(--space-4); }
   .subsection-title { font-size: var(--text-sm); font-weight: var(--font-weight-bold); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: var(--space-3); }
+  /* Key/value detail list — a label on the left, a value on the right, one
+   * row per line. Used for compact "details" cards (e.g. paired registration). */
+  .kv { list-style: none; margin: 0; padding: 0; }
+  .kv li { display: flex; justify-content: space-between; gap: var(--space-4); padding: var(--space-2) 0; border-bottom: 1px solid var(--border-light); font-size: var(--text-base); }
+  .kv li:last-child { border-bottom: 0; }
+  .kv li > span { color: var(--muted); }
+  .kv li > strong { font-weight: var(--font-weight-semibold); text-align: right; word-break: break-word; }
 
   /* Stats */
   .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: var(--space-3); }
@@ -1335,6 +1342,15 @@ const SHARED_CSS = `
   .pairing-qr-wrap { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); }
   .pairing-qr { border-radius: var(--radius-sm); background: #fff; border: 1px solid var(--border); padding: var(--space-2); }
   .pairing-qr-cap { font-size: var(--text-xs); color: var(--muted); }
+  /* A quieter, smaller pairing-code rendering for status/detail contexts
+   * (e.g. the post-pairing dashboard card) where the code is informational
+   * rather than the primary call to action. Shares the hero's brand colour
+   * and monospace treatment so the two read as the same element. */
+  .pairing-code-inline {
+    font-family: ui-monospace, monospace; font-size: var(--text-xl); font-weight: var(--font-weight-bold);
+    letter-spacing: .12em; color: var(--brand); line-height: var(--leading-tight);
+    margin-top: var(--space-1); word-break: break-all;
+  }
   .copy-btn { display: inline-flex; align-items: center; gap: 6px; }
   .copy-btn .copy-ok { display: none; }
   .copy-btn.is-copied .copy-ok { display: inline; }
@@ -4032,10 +4048,10 @@ export async function startUiServer(runtime: AgentRuntime) {
             <div style="margin-top:3px;">${htmlEscape(formatTimestamp(profile?.approvedAt, 'Not approved'))}</div>
           </div>
         </div>
-        <div class="subsection" style="margin-top:14px; padding-top:14px;">
-          <div class="muted small">Pairing code</div>
-          <div class="mono" style="font-size:20px; letter-spacing:.15em; margin-top:4px;">${htmlEscape(snapshot.registration?.pairingCode ?? '—')}</div>
-          <div class="muted small" style="margin-top:4px;">Expires: ${htmlEscape(snapshot.registration?.pairingCodeExpiresAt ?? '—')}</div>
+        <div class="subsection">
+          <div class="pairing-hero-label">Pairing code</div>
+          <div class="pairing-code-inline">${htmlEscape(snapshot.registration?.pairingCode ?? '—')}</div>
+          <div class="muted small" style="margin-top:4px;">Expires ${htmlEscape(formatTimestamp(snapshot.registration?.pairingCodeExpiresAt, '—'))}</div>
           <div class="btn-row" style="margin-top:12px;">
             <form method="post" action="/actions/repair" class="js-pending-form">
               ${hiddenUiToken(snapshot.uiToken)}
@@ -4418,7 +4434,7 @@ export async function startUiServer(runtime: AgentRuntime) {
             <li><span>Status</span><strong>${htmlEscape(profile?.approvalStatus ?? 'unknown')}</strong></li>
             <li><span>Agent ID</span><strong>${htmlEscape(snapshot.registration?.agentId ?? '—')}</strong></li>
             <li><span>Backend URL</span><strong>${htmlEscape(configuredServerUrl)}</strong></li>
-            ${profile?.approvedAt ? `<li><span>Approved</span><strong>${htmlEscape(profile.approvedAt)}</strong></li>` : ''}
+            ${profile?.approvedAt ? `<li><span>Approved</span><strong>${htmlEscape(formatTimestamp(profile.approvedAt))}</strong></li>` : ''}
           </ul>
           <p style="margin-top:12px">If your platform admin needs to re-pair this PC, contact <a href="/support">Support</a>.</p>
         </div>`
