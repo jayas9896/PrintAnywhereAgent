@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { AGENT_SIG_VERSION, signRequest } from '../core/crypto.js'
+import { AGENT_SIG_VERSION, generateNonce, signRequest } from '../core/crypto.js'
 import type {
   AgentJobQueueStatus,
   AgentPrinterStatus,
@@ -228,13 +228,21 @@ export class CloudApiClient {
   ) {}
 
   /**
-   * Builds the HMAC headers for an agent request (KAN-92, scheme v2).
+   * Builds the HMAC headers for an agent request (KAN-92 body binding;
+   * KAN-451 nonce binding — scheme v2).
    *
    * `body` MUST be the exact string passed to `fetch(..., { body })` so
    * the body digest the agent signs matches the bytes the backend
    * receives. For bodyless requests (GET / DELETE) omit it — the empty
    * default hashes to `sha256("")`, the same uniform shape the backend
    * verifies.
+   *
+   * A fresh single-use nonce is minted per call and emitted in the
+   * `X-Agent-Nonce` header; the backend v2 filter requires it, binds it
+   * into the signature, and claims it one-time so a captured request
+   * cannot be replayed within the timestamp window. Callers must invoke
+   * this per request (never cache and reuse the returned headers), so each
+   * signed request carries its own nonce.
    */
   private signedHeaders(
     method: string,
@@ -245,11 +253,13 @@ export class CloudApiClient {
     const secret = this.getSigningSecret?.()
     if (!secret) return extra
     const ts = Date.now()
-    const sig = signRequest(ts, method, path, secret, body)
+    const nonce = generateNonce()
+    const sig = signRequest(ts, method, path, secret, nonce, body)
     return {
       ...extra,
       'X-Agent-Sig-Version': AGENT_SIG_VERSION,
       'X-Agent-Timestamp': String(ts),
+      'X-Agent-Nonce': nonce,
       'X-Agent-Signature': sig,
     }
   }
