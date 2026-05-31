@@ -109,6 +109,16 @@
     <Property Id="ARPCONTACT" Value="support@dhruvantasystems.com" />
     <Property Id="ARPHELPLINK" Value="https://printanywhere.dhruvantasystems.com/" />
 
+    <!-- KAN-451: opt-in clean install. Default "0" PRESERVES pairing/identity/
+         printer state across reinstalls and upgrades (the normal case). Set
+         CLEANINSTALL=1 (e.g. `msiexec /i PrintAnywhereAgent.msi CLEANINSTALL=1`)
+         to reset this machine. Secure="yes" allows it through a UAC-elevated
+         install. The derived CLEANINSTALLARG token (""/" -CleanInstall") is set
+         only at runtime by the conditional SetProperty below — left undeclared
+         here on purpose: an empty-valued Property is dropped by WiX (PropertyUseless)
+         and an unset property already formats to "" in the command string. -->
+    <Property Id="CLEANINSTALL" Value="0" Secure="yes" />
+
     <!-- KAN-425: Add/Remove Programs icon. <Icon> EMBEDS the file into
          the MSI itself (it is not a runtime payload file), so it only
          needs a path that exists at WiX compile time. Point at the
@@ -190,10 +200,24 @@
          -StartTray), and ends with a running tray — so a quiet update
          self-heals the runtime without any interactive prompt.
          =================================================================== -->
+    <!-- KAN-451: fold the optional " -CleanInstall" flag into the provisioning
+         command only when the operator asked for a reset (CLEANINSTALL=1).
+         CLEANINSTALLARG defaults to "" so the normal install preserves data.
+         Scheduled After CostFinalize — well before the SetProperty below that
+         builds the command string — so [CLEANINSTALLARG] is already resolved
+         when that string is formatted. (Kept as a separate action that targets
+         a separate property so the proven RunAgentProvisioning SetProperty is
+         unchanged except for the appended token.) -->
+    <SetProperty Id="CLEANINSTALLARG"
+                 After="CostFinalize"
+                 Sequence="execute"
+                 Condition="CLEANINSTALL=&quot;1&quot;"
+                 Value=" -CleanInstall" />
+
     <SetProperty Id="RunAgentProvisioning"
                  Before="RunAgentProvisioning"
                  Sequence="execute"
-                 Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File &quot;[INSTALLDIR]scripts\install-release.ps1&quot; -DataDir &quot;[LocalAppDataFolder]Dhruvanta Systems\PrintAnywhereAgent\data&quot; -Port 43100 -RegisterStartupTask -CreateShortcuts -StartTray" />
+                 Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File &quot;[INSTALLDIR]scripts\install-release.ps1&quot; -DataDir &quot;[LocalAppDataFolder]Dhruvanta Systems\PrintAnywhereAgent\data&quot; -Port 43100 -RegisterStartupTask -CreateShortcuts -StartTray[CLEANINSTALLARG]" />
 
     <!-- BinaryRef MUST use the arch-suffixed preprocessor variable; a
          hardcoded literal (e.g. Wix4UtilCA_X86) fails the WiX link with
