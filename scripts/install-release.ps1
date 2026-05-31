@@ -4,6 +4,9 @@ param(
     [switch]$RegisterStartupTask,
     [switch]$CreateShortcuts,
     [switch]$StartTray,
+    # KAN-451: opt-in clean install. Default OFF preserves pairing/identity/
+    # printer state across reinstalls and upgrades; -CleanInstall resets it.
+    [switch]$CleanInstall,
     [string]$TaskName = "PrintAnywhereAgent"
 )
 
@@ -385,7 +388,52 @@ $envFilePath = Join-Path $configDir "agent.env"
 
 New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
 New-Item -ItemType Directory -Force -Path $configDir | Out-Null
-Initialize-StableDataDir -DataDir $DataDir -RepoRoot $repoRoot
+
+# KAN-451: capture provisioning to a durable log under the data dir. The MSI
+# RunAgentProvisioning custom action runs powershell hidden with Return="ignore",
+# so without this an install/provisioning failure is invisible — no console to
+# read and the MSI still reports success. Start the transcript as soon as the
+# data dir exists so every step below (and any failure) is recorded; the trap
+# at the top stops it and surfaces cause + consequence + recovery.
+$provisioningLog = Join-Path $DataDir "provisioning.log"
+try { Start-Transcript -Path $provisioningLog -Force | Out-Null } catch { }
+
+# KAN-451: make provisioning failures VISIBLE instead of silently swallowed.
+# With ErrorActionPreference='Stop', any terminating error runs this trap, which
+# records the cause, the user-facing consequence, and the recovery path into the
+# transcript above (and the console), then stops. The MSI custom action is
+# Return="ignore", so this non-zero exit does NOT roll back the core install —
+# the failure is simply diagnosable now instead of invisible.
+trap {
+    Write-Host ""
+    Write-Host "PrintAnywhere Agent provisioning FAILED."
+    Write-Host "  Cause:       $($_.Exception.Message)"
+    Write-Host "  Consequence: the agent may not have started and the tray icon may be missing (the local console on port $Port can still be running)."
+    Write-Host "  Recovery:    re-run the installer as administrator, or run scripts\install-release.ps1 manually; full details are in '$provisioningLog'."
+    try { Stop-Transcript | Out-Null } catch { }
+    break
+}
+
+# KAN-451: opt-in clean install. Default (no -CleanInstall) PRESERVES pairing,
+# identity, and printer state across reinstalls/upgrades. With -CleanInstall the
+# operator deliberately resets THIS machine: clear everything except the
+# in-progress provisioning log, then let Initialize-StableDataDir start fresh so
+# the agent re-registers and the admin re-pairs it.
+if ($CleanInstall) {
+    Write-Host "CleanInstall requested: resetting agent data in '$DataDir'. Existing pairing, identity, and published printers will be cleared and this machine will re-register."
+    Get-ChildItem -LiteralPath $DataDir -Force -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -ne 'provisioning.log' } |
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# Preserve/migrate prior state forward on a normal install. On -CleanInstall we
+# deliberately SKIP this: Initialize-StableDataDir would otherwise re-import the
+# newest sibling 'printanywhere-agent-v*\data\agent-state.json' into the just-
+# wiped dir (a leftover from an old zip-style install), silently undoing the
+# reset. Skipping it leaves the dir empty so the agent registers fresh.
+if (-not $CleanInstall) {
+    Initialize-StableDataDir -DataDir $DataDir -RepoRoot $repoRoot
+}
 
 if ((Test-Path $envExamplePath) -and (-not (Test-Path $envFilePath))) {
     Copy-Item $envExamplePath $envFilePath
@@ -610,11 +658,24 @@ if ($CreateShortcuts) {
 
 if ($StartTray) {
     Stop-ExistingTrayControllers
-    # Phase 2a — launch via the stable launcher so the running tray
-    # is rooted at the same indirection the scheduled tasks /
-    # shortcuts use. Falls back to the version-pinned script when no
-    # launcher exists (non-managed install).
-    if ($stableLauncher) {
+    # KAN-451: when the per-user tray scheduled task exists, start the tray
+    # THROUGH it (Start-ScheduledTask) rather than Start-Process. The MSI
+    # RunAgentProvisioning custom action runs on msiexec's window-station;
+    # a tray process launched there starts but its NotifyIcon never attaches
+    # to the notification area — the classic "runtime is up on the port, no
+    # tray icon". Task Scheduler runs the task in the logged-on user's
+    # interactive session, where the tray renders correctly. Fall back to the
+    # direct Start-Process launch when the task is absent (non-managed run, or
+    # task registration fell back to Startup-folder shortcuts above).
+    $trayTaskName = "$TaskName Tray"
+    $trayTask = $null
+    try { $trayTask = Get-ScheduledTask -TaskName $trayTaskName -ErrorAction SilentlyContinue } catch { }
+    if ($trayTask) {
+        Start-ScheduledTask -TaskName $trayTaskName
+        Write-Host "Started the tray via scheduled task '$trayTaskName' (runs in the interactive user session)."
+    } elseif ($stableLauncher) {
+        # Phase 2a — launch via the stable launcher so the running tray is
+        # rooted at the same indirection the scheduled tasks / shortcuts use.
         Start-Process `
             -FilePath "cmd.exe" `
             -ArgumentList @("/c", "`"$stableLauncher`"", "agent-tray.ps1", "-EnvFile", "`"$envFilePath`"", "-DataDir", "`"$DataDir`"", "-Port", $Port) `
@@ -646,3 +707,7 @@ Write-Host ""
 Write-Host "Notes:"
 Write-Host "- Change the backend URL only for local testing or a support-directed override."
 Write-Host "- The admin-approved business location is the fallback; use the Host location panel when this machine can provide GPS or OS location."
+
+# KAN-451: close the provisioning transcript on the success path. On a failure
+# the trap above stops it first; this no-ops harmlessly if no transcript is open.
+try { Stop-Transcript | Out-Null } catch { }
