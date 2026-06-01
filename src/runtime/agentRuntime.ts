@@ -705,6 +705,17 @@ export class AgentRuntime {
     await this.store.save(this.state)
   }
 
+  /**
+   * KAN-451 — persist the operator's "Developer mode" preference. When on,
+   * the local UI additionally surfaces the exact backend technical error
+   * detail on failed action submits. Changeable anytime; the snapshot
+   * exposes the flag automatically (it returns {@code this.state}).
+   */
+  async setDeveloperMode(enabled: boolean) {
+    this.state.developerMode = enabled
+    await this.store.save(this.state)
+  }
+
   async markCollected(jobId: string) {
     const secret = this.requireAgentSecret()
     const client = this.requireClient()
