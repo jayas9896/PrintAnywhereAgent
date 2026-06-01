@@ -65,6 +65,32 @@ function Get-AgentUiBaseUrl {
     return "https://$uiHost`:$uiPort"
 }
 
+# KAN-451: return the port the runtime actually bound to. The agent records its
+# real port in ui-runtime.json once it binds (it can fall back past a busy
+# 43100), so anything that talks to the running UI must read it rather than
+# assume the default. Mirrors the JSON-read guard in Get-AgentUiBaseUrl.
+function Get-AgentRuntimePort {
+    param([string]$DataDir, [int]$DefaultPort)
+
+    $resolvedPort = $DefaultPort
+
+    if (-not [string]::IsNullOrWhiteSpace($DataDir)) {
+        $runtimeInfoPath = Join-Path $DataDir "ui-runtime.json"
+        if (Test-Path $runtimeInfoPath) {
+            try {
+                $runtimeInfo = Get-Content $runtimeInfoPath -Raw | ConvertFrom-Json
+                if ($runtimeInfo.port -gt 0) {
+                    $resolvedPort = [int]$runtimeInfo.port
+                }
+            } catch {
+                # File mid-write or malformed — keep the configured port.
+            }
+        }
+    }
+
+    return $resolvedPort
+}
+
 function Stop-ExistingTrayControllers {
     $installRoot = Join-Path $env:LOCALAPPDATA "Dhruvanta Systems\PrintAnywhereAgent"
     $currentPid = $PID
@@ -109,8 +135,14 @@ $script:RestartAttempts = @()
 
 function Test-AgentHealth {
     try {
+        # KAN-451: probe the port the runtime actually bound to (from
+        # ui-runtime.json), not the default $Port. Otherwise, if the runtime
+        # fell back past a busy 43100, the probe targets a dead port and the
+        # tray is stuck on "Starting"/"Not responding" even though the UI is up
+        # — matching the real port that "Open PrintAnywhere Agent" already uses.
+        $healthPort = Get-AgentRuntimePort -DataDir $DataDir -DefaultPort $Port
         $response = Invoke-RestMethod -UseBasicParsing `
-            -Uri "https://127.0.0.1:$Port/health" `
+            -Uri "https://127.0.0.1:$healthPort/health" `
             -TimeoutSec 5 `
             -ErrorAction Stop
         return $response
