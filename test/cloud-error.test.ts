@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mapCloudError, renderOfflineBanner } from '../src/ui/server.ts'
+import { mapCloudError, renderDeveloperDetails, renderOfflineBanner } from '../src/ui/server.ts'
 
 // --- mapCloudError (KAN-40 scope #1 — P1-3) -------------------------------
 
@@ -101,4 +101,37 @@ test('renderOfflineBanner shows the friendly copy, not the raw error', () => {
 
 test('renderOfflineBanner carries the offline-banner id contract', () => {
   assert.match(renderOfflineBanner(new Error('x')), /id="offline-banner"/)
+})
+
+// --- renderDeveloperDetails (KAN-451) -------------------------------------
+
+test('renderDeveloperDetails returns empty string when developer mode is OFF', () => {
+  // The flag gating is the whole feature: OFF must leave error rendering
+  // byte-for-byte unchanged (no developer block at all).
+  assert.equal(renderDeveloperDetails(new Error('HTTP 400: bad'), false), '')
+})
+
+test('renderDeveloperDetails shows the raw HTTP status + backend body when ON', () => {
+  const html = renderDeveloperDetails(
+    new Error('HTTP 400: {"field":"baseJobPriceMinor","message":"must be >= 0"}'),
+    true,
+  )
+  assert.match(html, /Developer details/)
+  assert.match(html, /HTTP 400/)
+  assert.match(html, /baseJobPriceMinor/)
+})
+
+test('renderDeveloperDetails htmlEscapes the error text (no raw markup injection)', () => {
+  const html = renderDeveloperDetails(new Error('HTTP 400: <script>alert(1)</script>'), true)
+  assert.doesNotMatch(html, /<script>alert/)
+  assert.match(html, /&lt;script&gt;/)
+})
+
+test('renderDeveloperDetails tolerates a non-Error thrown value', () => {
+  assert.match(renderDeveloperDetails('plain string failure', true), /plain string failure/)
+})
+
+test('renderDeveloperDetails renders nothing for an empty/blank message even when ON', () => {
+  assert.equal(renderDeveloperDetails(new Error('   '), true), '')
+  assert.equal(renderDeveloperDetails('', true), '')
 })

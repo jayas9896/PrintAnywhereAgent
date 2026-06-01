@@ -610,6 +610,32 @@ export function renderOfflineBanner(error: unknown, retryHref: string = ''): str
   </div>`
 }
 
+/**
+ * KAN-451 — "Developer mode" technical-detail block.
+ *
+ * When `developerMode` is OFF (the default) this returns the empty string so
+ * error rendering is byte-for-byte unchanged. When ON it returns a clearly-
+ * separated "Developer details" block carrying the RAW technical info from the
+ * thrown error — i.e. `error.message`, which the cloud client builds as
+ * `HTTP <status>: <response body slice>` (see api.ts `apiError`), so the
+ * operator can read the exact HTTP status + backend validation/field errors.
+ *
+ * SECURITY: this helper deliberately accepts ONLY `(error, developerMode)` —
+ * it never sees the snapshot, request body, uiToken, or any secret, so by
+ * construction it cannot leak them. It renders the error message text alone
+ * (no stack, no exception class name) and htmlEscapes it.
+ */
+export function renderDeveloperDetails(error: unknown, developerMode: boolean): string {
+  if (!developerMode) return ''
+  const detail = error instanceof Error ? error.message : String(error ?? '')
+  if (!detail.trim()) return ''
+  return `<div class="dev-details" role="note" style="margin-top:var(--space-2); padding:12px 14px; border:1px solid var(--border-strong, #d0d7de); border-radius:8px; background:var(--surface-muted, #f6f8fa);">
+    <div class="dev-details-title" style="font-weight:600; font-size:13px; margin-bottom:6px;">Developer details</div>
+    <p class="muted small" style="margin:0 0 6px;">Exact technical error from the PrintAnywhere backend (shown because Developer mode is on).</p>
+    <pre class="mono small" style="white-space:pre-wrap; word-break:break-word; margin:0;">${htmlEscape(detail)}</pre>
+  </div>`
+}
+
 // ---------------------------------------------------------------------------
 // Lifecycle / approval banners (KAN-40 scope #3 — UX review KAN-29 P1-8)
 // ---------------------------------------------------------------------------
@@ -1985,6 +2011,39 @@ function renderBrandingCard(snapshot: ReturnType<AgentRuntime['snapshot']>) {
           </div>
         </form>
       </div>
+    </div>`
+}
+
+/**
+ * KAN-451 — the "Developer mode" toggle card on the Settings page. Off by
+ * default. When on, the local UI's error displays additionally show the exact
+ * technical detail from the backend (HTTP status + response body / validation
+ * messages) to aid troubleshooting. The form POSTs to /settings/developer-mode
+ * (uiToken hidden input + same action-handler conventions as the other
+ * Settings forms) and the handler redirects back with a notice.
+ */
+function renderDeveloperModeCard(snapshot: ReturnType<AgentRuntime['snapshot']>) {
+  const enabled = snapshot.developerMode ?? false
+  return `
+    <div class="card">
+      <div class="card-title">Developer mode</div>
+      <p class="muted small" style="margin-bottom:14px;">
+        For troubleshooting only. When on, error messages on this console will also show the
+        <strong>exact technical detail</strong> from the PrintAnywhere backend (the HTTP status and
+        the response body / field-level validation messages) underneath the usual friendly message.
+        Leave this off for everyday use.
+      </p>
+      <form method="post" action="/settings/developer-mode" class="stack js-pending-form">
+        ${hiddenUiToken(snapshot.uiToken)}
+        <label class="checkbox-row" style="display:flex; align-items:center; gap:10px;">
+          <input type="checkbox" name="developerMode" ${checked(enabled)} />
+          <span class="label-text" style="margin:0;">Show exact technical error details</span>
+        </label>
+        <div class="hint">Currently ${enabled ? 'on' : 'off'}.</div>
+        <div class="btn-row">
+          <button class="btn btn-primary" type="submit" data-pending-text="Saving…">Save developer mode</button>
+        </div>
+      </form>
     </div>`
 }
 
@@ -3719,6 +3778,12 @@ function renderFormErrorPage(opts: {
   formHtml: string
   backHref: string
   backLabel: string
+  /**
+   * KAN-451 — pre-rendered "Developer details" block (already gated on the
+   * developerMode flag via renderDeveloperDetails). Empty string when the flag
+   * is off or there is no backend error, leaving the page unchanged.
+   */
+  developerDetails?: string
 }): string {
   return `
     <div>
@@ -3726,6 +3791,7 @@ function renderFormErrorPage(opts: {
       <div class="page-title">${htmlEscape(opts.title)}</div>
     </div>
     ${stateBanner({ variant: opts.leadVariant ?? 'error', title: opts.lead })}
+    ${opts.developerDetails ?? ''}
     <div class="card">${opts.formHtml}</div>
     <div class="btn-row">
       <a class="btn btn-secondary" href="${htmlEscape(opts.backHref)}">${htmlEscape(opts.backLabel)}</a>
@@ -4267,6 +4333,7 @@ export async function startUiServer(runtime: AgentRuntime) {
         <p class="page-subtitle">Customer-facing branding and white-label settings for this machine.</p>
       </div>
       ${renderBrandingCard(snapshot)}
+      ${renderDeveloperModeCard(snapshot)}
     `
     response.type('html').send(
       pageShell({ title: 'Settings', activePage: 'settings', snapshot, notice, error: errorMessage }, content),
@@ -4882,7 +4949,15 @@ export async function startUiServer(runtime: AgentRuntime) {
       }
     }
 
-    const renderConfigError = (lead: string, leadVariant: 'warning' | 'error', fieldErrors: Record<string, string>) => {
+    const renderConfigError = (
+      lead: string,
+      leadVariant: 'warning' | 'error',
+      fieldErrors: Record<string, string>,
+      // KAN-451 — pre-rendered dev-details block; only the cloud-failure catch
+      // path supplies one. The up-front field-validation path has no backend
+      // Error, so it passes ''.
+      developerDetails = '',
+    ) => {
       const formHtml = renderConfigureForm(snapshot, serverUrl || defaultPrintAnywhereBackendUrl(), {
         submitted: body,
         fieldErrors,
@@ -4898,6 +4973,7 @@ export async function startUiServer(runtime: AgentRuntime) {
             formHtml,
             backHref: '/',
             backLabel: 'Back to dashboard',
+            developerDetails,
           }),
         ),
       )
@@ -4928,7 +5004,9 @@ export async function startUiServer(runtime: AgentRuntime) {
       const lead = message.includes('already registered')
         ? message
         : `${mapCloudError(error).body} Your details below are kept — press Save to try again.`
-      renderConfigError(lead, 'error', {})
+      // KAN-451 — surface the raw backend status/body underneath when Developer
+      // mode is on so the operator sees exactly why the backend declined.
+      renderConfigError(lead, 'error', {}, renderDeveloperDetails(error, snapshot.developerMode ?? false))
     }
   })
 
@@ -4950,6 +5028,31 @@ export async function startUiServer(runtime: AgentRuntime) {
       redirectWithStatus(response, 'notice', 'Your shop details were saved.')
     } catch (error) {
       redirectWithStatus(response, 'error', error instanceof Error ? error.message : 'Could not save branding')
+    }
+  })
+
+  // KAN-451 — persist the "Developer mode" toggle. An unchecked checkbox is
+  // absent from the POST body, so an absent/non-"on" value reads as OFF.
+  app.post('/settings/developer-mode', async (request, response) => {
+    if (!verifyUiRequest(runtime, request, response)) return
+    try {
+      const enabled = String((request.body as Record<string, unknown>).developerMode ?? '') === 'on'
+      await runtime.setDeveloperMode(enabled)
+      redirectWithStatus(
+        response,
+        'notice',
+        enabled
+          ? 'Developer mode is on. Error messages will now show technical backend details.'
+          : 'Developer mode is off.',
+        '/settings',
+      )
+    } catch (error) {
+      redirectWithStatus(
+        response,
+        'error',
+        error instanceof Error ? error.message : 'Could not update developer mode',
+        '/settings',
+      )
     }
   })
 
@@ -5135,6 +5238,9 @@ export async function startUiServer(runtime: AgentRuntime) {
             formHtml,
             backHref: '/',
             backLabel: 'Back to dashboard',
+            // KAN-451 — when Developer mode is on, also show the exact backend
+            // status + validation body (e.g. which printer field the 400 hit).
+            developerDetails: renderDeveloperDetails(error, snapshot.developerMode ?? false),
           }),
         ),
       )

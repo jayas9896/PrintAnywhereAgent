@@ -207,6 +207,14 @@ export interface AgentState {
   brandLogoUrl?: string | null
   /** Support contact email shown on the Support page. */
   supportContactEmail?: string | null
+  /**
+   * KAN-451 — operator-set "Developer mode" toggle (default false). When
+   * true, the local UI's friendly error displays ALSO show the exact
+   * technical detail from the backend (HTTP status + response body /
+   * validation messages) to aid troubleshooting. Behaviour is unchanged
+   * when false. Persisted; changeable anytime from the Settings page.
+   */
+  developerMode?: boolean
 }
 
 export interface PollJob {
