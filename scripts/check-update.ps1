@@ -99,8 +99,12 @@ function Initialize-UpdateWindow {
     $form.MaximizeBox = $false
     $form.MinimizeBox = $true
     $form.ShowInTaskbar = $true
-    $form.Width = 600
-    $form.Height = 430
+    # KAN-451: size the CLIENT area, not the outer window. Setting Width/Height
+    # left the bottom "Close" / "Download and install" buttons clipped once the
+    # title bar + borders (and any DPI scaling) ate into the 430px outer height.
+    # ClientSize fixes the usable area to fit every control's pixel layout
+    # (widest control right-edge 562, lowest button bottom 372, + margins).
+    $form.ClientSize = New-Object System.Drawing.Size(584, 396)
     $form.BackColor = [System.Drawing.Color]::FromArgb(245, 247, 251)
 
     $iconPath = Join-Path $repoRoot "assets\dhruvanta-agent.ico"
@@ -160,6 +164,8 @@ function Initialize-UpdateWindow {
     $installButton.Top = 338
     $installButton.Width = 150
     $installButton.Height = 34
+    # Pin to the bottom-right so DPI auto-scaling keeps the buttons fully on-form.
+    $installButton.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Right
     $installButton.Enabled = $false
 
     $closeButton = New-Object System.Windows.Forms.Button
@@ -168,6 +174,7 @@ function Initialize-UpdateWindow {
     $closeButton.Top = 338
     $closeButton.Width = 110
     $closeButton.Height = 34
+    $closeButton.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Right
     $closeButton.Add_Click({ $script:UpdateForm.Close() })
 
     $installButton.Add_Click({
