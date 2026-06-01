@@ -181,7 +181,13 @@ export interface AgentCouponUpsertPayload {
 }
 
 function apiError(response: Response, body: string): Error {
-  const safe = body.slice(0, 120).replace(/[\r\n]+/g, ' ').trim()
+  // KAN-451: keep enough of the body to carry the backend's field-level
+  // validation detail. Its 400 shape is `{"code":...,"message":...,
+  // "timestamp":...,"errors":{<field>:<message>}}` — the `errors` map starts
+  // ~110 chars in, so the old 120-char cap clipped exactly the useful part.
+  // This message only surfaces verbatim under Developer mode (renderDeveloper
+  // details); the friendly mapper keys off the `HTTP <status>` prefix.
+  const safe = body.slice(0, 600).replace(/[\r\n]+/g, ' ').trim()
   return new Error(`HTTP ${response.status}: ${safe || response.statusText}`)
 }
 
