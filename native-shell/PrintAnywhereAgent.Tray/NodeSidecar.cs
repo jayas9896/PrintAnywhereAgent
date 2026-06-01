@@ -165,8 +165,12 @@ public sealed class NodeSidecar : IDisposable
     {
         try
         {
+            // KAN-451: the agent's LOCAL UI serves health at /health (no
+            // /printanywhere base path — that prefix is the CLOUD backend's).
+            // Probing /printanywhere/health 404'd forever, so the tray never
+            // left "Starting…" even though the runtime was healthy and serving.
             var response = await _healthClient.GetAsync(
-                $"https://127.0.0.1:{_port}/printanywhere/health", cancel).ConfigureAwait(false);
+                $"https://127.0.0.1:{_port}/health", cancel).ConfigureAwait(false);
             return response.IsSuccessStatusCode;
         }
         catch
