@@ -21,6 +21,7 @@ import {
 } from '../src/ui/launcherConfig.ts'
 import { LOCAL_UI_DOMAIN, localCertPaths } from '../src/ui/localHttps.ts'
 import {
+  domainResolvesToLoopback,
   evaluateLocalUiDomainHealth,
   hostsFileHasLocalUiEntry,
 } from '../src/ui/localHttpsHealth.ts'
@@ -192,6 +193,95 @@ test('evaluateLocalUiDomainHealth reports certPresent when the data dir has the 
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
   }
+})
+
+// KAN-451: name resolution can come from a public DNS A-record pointing the
+// domain at loopback, NOT only the hosts file. With DNS resolving + the cert
+// present, the banner must be suppressed even with no hosts entry.
+test('evaluateLocalUiDomainHealth suppresses the banner when DNS resolves to loopback (no hosts entry)', () => {
+  const dataDir = freshDataDir()
+  try {
+    const paths = localCertPaths(dataDir)
+    mkdirSync(paths.dir, { recursive: true })
+    writeFileSync(paths.keyPath, 'KEY')
+    writeFileSync(paths.certPath, 'CERT')
+    const health = evaluateLocalUiDomainHealth({
+      dataDir,
+      uiHost: 'domain',
+      // Operator pointed a public A-record at 127.0.0.1 instead of editing
+      // the hosts file — the host runner has no hosts entry for the domain.
+      domainResolvesToLoopback: true,
+    })
+    assert.equal(health.ok, true)
+    assert.equal(health.certPresent, true)
+    assert.equal(health.reason, '')
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+// KAN-451: the CERT requirement is independent — DNS resolution alone must NOT
+// suppress the banner when the TLS cert is missing.
+test('evaluateLocalUiDomainHealth still requires the cert even when DNS resolves to loopback', () => {
+  const dataDir = freshDataDir()
+  try {
+    const health = evaluateLocalUiDomainHealth({
+      dataDir,
+      uiHost: 'domain',
+      domainResolvesToLoopback: true,
+    })
+    assert.equal(health.ok, false)
+    assert.equal(health.certPresent, false)
+    assert.match(health.reason, /certificate|TLS/i)
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+// ---- domainResolvesToLoopback ----------------------------------------------
+
+test('domainResolvesToLoopback reports true for a 127.0.0.1 answer', async () => {
+  const ok = await domainResolvesToLoopback(LOCAL_UI_DOMAIN, {
+    lookupFn: async () => ({ address: '127.0.0.1' }),
+  })
+  assert.equal(ok, true)
+})
+
+test('domainResolvesToLoopback reports true for an ::1 answer', async () => {
+  const ok = await domainResolvesToLoopback(LOCAL_UI_DOMAIN, {
+    lookupFn: async () => ({ address: '::1' }),
+  })
+  assert.equal(ok, true)
+})
+
+test('domainResolvesToLoopback reports false for a non-loopback (public) answer', async () => {
+  const ok = await domainResolvesToLoopback(LOCAL_UI_DOMAIN, {
+    lookupFn: async () => ({ address: '203.0.113.5' }),
+  })
+  assert.equal(ok, false)
+})
+
+test('domainResolvesToLoopback reports false when the lookup throws (NXDOMAIN/offline)', async () => {
+  const ok = await domainResolvesToLoopback(LOCAL_UI_DOMAIN, {
+    lookupFn: async () => {
+      throw new Error('ENOTFOUND')
+    },
+  })
+  assert.equal(ok, false)
+})
+
+test('domainResolvesToLoopback reports false when the lookup exceeds the timeout', async () => {
+  const ok = await domainResolvesToLoopback(LOCAL_UI_DOMAIN, {
+    timeoutMs: 10,
+    // Resolves to loopback but only after the timeout has already fired —
+    // "uncertain" must be treated as not-resolved (no false positive).
+    lookupFn: () =>
+      new Promise((resolve) => {
+        const t = setTimeout(() => resolve({ address: '127.0.0.1' }), 200)
+        t.unref?.()
+      }),
+  })
+  assert.equal(ok, false)
 })
 
 // ---- hostsFileHasLocalUiEntry ----------------------------------------------

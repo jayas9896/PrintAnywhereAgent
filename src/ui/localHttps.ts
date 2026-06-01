@@ -38,6 +38,15 @@ import selfsigned from 'selfsigned'
 /** The domain the agent UI is served at. Resolves to 127.0.0.1 via the hosts file. */
 export const LOCAL_UI_DOMAIN = 'local.printanywhere.dhruvantasystems.com'
 
+/**
+ * KAN-451: Organization stamped into the certificate SUBJECT so the cert
+ * viewer shows a recognisable issuer instead of "Not part of certificate".
+ * Purely cosmetic — the CN (the local UI domain) and the SANs are unchanged.
+ */
+export const LOCAL_UI_CERT_ORG = 'Dhruvanta Systems Private Limited'
+/** Organizational Unit shown alongside the org in the cert subject. */
+export const LOCAL_UI_CERT_OU = 'PrintAnywhere Agent'
+
 /** Subject Alternative Names baked into the per-host certificate. */
 export const LOCAL_UI_CERT_SANS = [LOCAL_UI_DOMAIN, 'localhost', '127.0.0.1'] as const
 
@@ -97,7 +106,14 @@ function certNeedsRenewal(certPem: string): boolean {
 
 /** Generate a fresh self-signed certificate covering the local UI SANs. */
 export async function generateLocalCert(): Promise<LocalCertMaterial> {
-  const attrs = [{ name: 'commonName', value: LOCAL_UI_DOMAIN }]
+  // KAN-451: keep CN = the local UI domain, and stamp the Organization (and
+  // OU) into the subject so the cert viewer no longer shows an empty issuer.
+  // `selfsigned`'s convertAttributes maps `organizationName` -> O and `OU` -> OU.
+  const attrs = [
+    { name: 'commonName', value: LOCAL_UI_DOMAIN },
+    { name: 'organizationName', value: LOCAL_UI_CERT_ORG },
+    { shortName: 'OU', value: LOCAL_UI_CERT_OU },
+  ]
   const notBeforeDate = new Date()
   const notAfterDate = new Date(notBeforeDate.getTime() + CERT_VALIDITY_DAYS * 24 * 60 * 60 * 1000)
   const pems = await selfsigned.generate(attrs, {
