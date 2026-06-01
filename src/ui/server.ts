@@ -36,6 +36,8 @@ import {
   domainResolvesToLoopback as domainResolvesToLoopbackCheck,
 } from './localHttpsHealth.js'
 import { runLocalHttpsRepair } from './localHttpsRepair.js'
+import { restartElevated } from './restartElevated.js'
+import { isElevated } from '../platform/elevation.js'
 import {
   RECOMMENDED_SECURE_COVER_SWATCHES,
   parseHexColor,
@@ -704,6 +706,45 @@ export function selectLifecycleBanner(
           'able to find or print to your shop until a PrintAnywhere admin approves it — ' +
           'this is a one-time check and usually takes less than a day.',
       }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Elevation banner (KAN-451)
+// ---------------------------------------------------------------------------
+//
+// The per-user installer runs the agent NON-elevated, so the local-domain
+// cert-trust + hosts-file setup silently fail and the operator sees cert
+// warnings / "Local domain not configured" with no explanation. When the
+// runtime is detected as NOT elevated, recommend an elevated relaunch with a
+// one-click "Restart as administrator" button.
+//
+// FAIL-SAFE: the banner is shown ONLY when elevation is a definitive `false`.
+// Both `true` (elevated) and `null` (unknown — detection errored, timed out,
+// or the host is non-Windows) render NOTHING, so a working install is never
+// falsely nagged. See src/platform/elevation.ts for the detection contract.
+
+export interface ElevationBanner {
+  title: string
+  body: string
+}
+
+/**
+ * Pure, testable mapping from the tri-state elevation result to the banner the
+ * UI should render — or `null` when no banner is warranted. Only a definitive
+ * "not elevated" (`false`) produces a banner.
+ */
+export function selectElevationBanner(elevation: boolean | null): ElevationBanner | null {
+  if (elevation !== false) return null
+  return {
+    title: 'Run the agent as administrator to finish local setup',
+    body:
+      'This agent is not running as an administrator, so it could not trust the local ' +
+      'security certificate or add the local web address for the console. Customers can ' +
+      'still print, but you may see certificate warnings or a "Local domain not ' +
+      'configured" notice. Click below to restart the agent as an administrator — ' +
+      'Windows will ask you to confirm. Once it reopens with administrator rights, use ' +
+      '"Repair local URL setup" to finish (it will then succeed).',
   }
 }
 
@@ -1599,6 +1640,35 @@ export function stateBanner(opts: {
     <span class="state-banner-body">
       <span class="state-banner-title">${htmlEscape(opts.title)}</span>
       ${opts.body ? `<span class="state-banner-text">${htmlEscape(opts.body)}</span>` : ''}
+    </span>
+  </div>`
+}
+
+/**
+ * KAN-451: render the elevation banner — a `warning` stateBanner carrying the
+ * "Restart as administrator" button — or an empty string when no banner is
+ * warranted. Reuses the existing stateBanner styling and posts to the
+ * uiToken-checked /actions/restart-elevated handler. The button is plain
+ * server-rendered HTML (no inline JS) so it stays inside the strict CSP.
+ *
+ * Returns `''` when `elevation` is `true` (elevated) or `null` (unknown) so the
+ * caller can interpolate it unconditionally.
+ */
+export function elevationBannerHtml(
+  elevation: boolean | null,
+  uiToken: string | null | undefined,
+): string {
+  const banner = selectElevationBanner(elevation)
+  if (!banner) return ''
+  return `<div id="elevation-banner" class="state-banner state-banner-warning" role="status" aria-live="polite">
+    <span class="state-banner-icon" aria-hidden="true">⚠</span>
+    <span class="state-banner-body">
+      <span class="state-banner-title">${htmlEscape(banner.title)}</span>
+      <span class="state-banner-text">${htmlEscape(banner.body)}</span>
+      <form method="post" action="/actions/restart-elevated" class="js-pending-form" style="margin-top:8px;">
+        ${hiddenUiToken(uiToken)}
+        <button type="submit" class="btn btn-primary" data-pending-text="Restarting…">Restart as administrator</button>
+      </form>
     </span>
   </div>`
 }
@@ -3858,6 +3928,21 @@ export async function startUiServer(runtime: AgentRuntime) {
   }
   const startupLauncherConfig = readLauncherConfig(startupDataDir)
 
+  // KAN-451: the "Restart as administrator" action relaunches the agent via
+  // start-agent-background.ps1, which needs the configured port. Compute it
+  // once here (same precedence as the bind-time computation below) so the
+  // route handlers — registered before the bind block runs — can pass it to
+  // the elevated relaunch. The launcher reclaims any stale listener on this
+  // port, so a fallback-bound runtime still hands off cleanly.
+  const startupConfiguredPort = (() => {
+    const configured = Number(
+      process.env.PRINTANYWHERE_AGENT_PORT ?? startupLauncherConfig.port ?? DEFAULT_UI_PORT,
+    )
+    return Number.isInteger(configured) && configured > 0 && configured < 65536
+      ? configured
+      : DEFAULT_UI_PORT
+  })()
+
   app.use((_request, response, next) => {
     response.setHeader('X-Frame-Options', 'DENY')
     response.setHeader('X-Content-Type-Options', 'nosniff')
@@ -3978,11 +4063,17 @@ export async function startUiServer(runtime: AgentRuntime) {
       domainResolvesToLoopback,
     })
 
+    // KAN-451: recommend an elevated relaunch when the runtime is NOT running
+    // as administrator. Fail-safe: unknown/elevated → no banner (the helper
+    // returns '' for both), so a working install is never falsely nagged.
+    const elevation = await isElevated()
+
     const content = `
       <div>
         <div class="page-eyebrow">Agent console</div>
         <div class="page-title">Dashboard</div>
       </div>
+      ${elevationBannerHtml(elevation, snapshot.uiToken)}
       ${lifecycleBanner
         ? `<div id="lifecycle-banner">${stateBanner({
             variant: lifecycleBanner.variant,
@@ -4472,13 +4563,16 @@ export async function startUiServer(runtime: AgentRuntime) {
   // QR/code and the current approval lifecycle (pending / approved /
   // suspended / revoked). The dashboard kept showing this material
   // alongside ops cards which was visually noisy for a first-run owner.
-  app.get('/registration', (request, response) => {
+  app.get('/registration', async (request, response) => {
     const snapshot = runtime.snapshot()
     const notice = typeof request.query.notice === 'string' ? request.query.notice : null
     const errorMessage = typeof request.query.error === 'string' ? request.query.error : null
     const configuredServerUrl = snapshot.serverUrl ?? defaultPrintAnywhereBackendUrl()
     const profile = snapshot.profile
     const lifecycleBanner = selectLifecycleBanner(profile)
+    // KAN-451: same fail-safe elevation banner as the dashboard — '' when
+    // elevated/unknown, so the registration page never falsely nags either.
+    const elevation = await isElevated()
     const isConfigured = !!snapshot.serverUrl
     const isPaired = !!snapshot.registration?.agentId
 
@@ -4526,6 +4620,7 @@ export async function startUiServer(runtime: AgentRuntime) {
         <div class="page-title">Registration &amp; approval</div>
         <p class="page-subtitle">Pair this PC with the platform admin and track your shop's approval status.</p>
       </div>
+      ${elevationBannerHtml(elevation, snapshot.uiToken)}
       ${body}
     `
     response.type('html').send(
@@ -5163,6 +5258,36 @@ export async function startUiServer(runtime: AgentRuntime) {
         response,
         'error',
         error instanceof Error ? error.message : 'Could not run the local URL repair.',
+      )
+    }
+  })
+
+  // KAN-451: "Restart as administrator" action — wired to the elevation banner.
+  // Spawns a detached, elevated relaunch of the agent via
+  // start-agent-background.ps1 (the same launcher the tray/installer use). The
+  // launcher does Stop-Existing-then-start, so the elevated instance reclaims
+  // the port and takes over. Best-effort: a spawn failure surfaces a clear
+  // manual fallback and never crashes the running runtime. The elevated port +
+  // data dir are passed explicitly so the new instance reattaches the same
+  // identity rather than re-deriving its data dir.
+  app.post('/actions/restart-elevated', async (request, response) => {
+    if (!verifyUiRequest(runtime, request, response)) return
+    try {
+      const result = await restartElevated({
+        dataDir: startupDataDir,
+        port: startupConfiguredPort,
+      })
+      // On a successful relaunch this process may be killed before the
+      // redirect renders (the elevated instance reclaims the port). That is
+      // expected; the up-front notice has already done its job if it lands.
+      redirectWithStatus(response, result.ok ? 'notice' : 'error', result.message)
+    } catch (error) {
+      redirectWithStatus(
+        response,
+        'error',
+        error instanceof Error
+          ? error.message
+          : 'Could not restart the agent as administrator. Right-click the PrintAnywhere Agent shortcut and choose "Run as administrator".',
       )
     }
   })
