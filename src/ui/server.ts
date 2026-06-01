@@ -31,7 +31,10 @@ import {
   resetLauncherConfigIfMajorUpgrade,
   writeUiRuntimeInfo,
 } from './launcherConfig.js'
-import { evaluateLocalUiDomainHealth } from './localHttpsHealth.js'
+import {
+  evaluateLocalUiDomainHealth,
+  domainResolvesToLoopback as domainResolvesToLoopbackCheck,
+} from './localHttpsHealth.js'
 import { runLocalHttpsRepair } from './localHttpsRepair.js'
 import {
   RECOMMENDED_SECURE_COVER_SWATCHES,
@@ -3921,7 +3924,7 @@ export async function startUiServer(runtime: AgentRuntime) {
   })
 
   // ── Dashboard ─────────────────────────────────────────────────────────────
-  app.get('/', (request, response) => {
+  app.get('/', async (request, response) => {
     const snapshot = runtime.snapshot()
     const notice = typeof request.query.notice === 'string' ? request.query.notice : null
     const errorMessage = typeof request.query.error === 'string' ? request.query.error : null
@@ -3960,9 +3963,19 @@ export async function startUiServer(runtime: AgentRuntime) {
     // underlying support (hosts entry, per-host cert) is missing, surface a
     // prominent banner with a "Repair local URL setup" button so the
     // operator never has to wonder why the URL is wrong.
+    // KAN-451: name resolution can be wired via the hosts file OR a public DNS
+    // A-record pointing the domain at 127.0.0.1. Do the (best-effort, async)
+    // DNS lookup here — routes are async — and pass the result into the pure,
+    // synchronous evaluator. Only bother when we're on the domain host; the
+    // evaluator early-returns for localhost.
+    const domainResolvesToLoopback =
+      startupLauncherConfig.uiHost === 'domain'
+        ? await domainResolvesToLoopbackCheck(LOCAL_UI_DOMAIN)
+        : false
     const domainHealth = evaluateLocalUiDomainHealth({
       dataDir: startupDataDir,
       uiHost: startupLauncherConfig.uiHost,
+      domainResolvesToLoopback,
     })
 
     const content = `

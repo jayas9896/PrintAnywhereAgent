@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { X509Certificate } from 'node:crypto'
 import {
+  LOCAL_UI_CERT_ORG,
   LOCAL_UI_CERT_SANS,
   LOCAL_UI_DOMAIN,
   ensureLocalCert,
@@ -43,6 +44,17 @@ test('generateLocalCert issues a cert covering the domain, localhost and 127.0.0
   assert.match(material.key, /BEGIN (RSA )?PRIVATE KEY/)
   // The thumbprint is the colon-free uppercase SHA-1 certutil expects.
   assert.match(material.thumbprint, /^[0-9A-F]+$/)
+})
+
+test('generateLocalCert stamps the organization into the cert subject (KAN-451)', async () => {
+  const material = await generateLocalCert()
+  const cert = new X509Certificate(material.cert)
+  // The cert viewer previously showed an empty Organization ("Not part of
+  // certificate"); the subject must now carry O=Dhruvanta Systems ... while
+  // keeping the CN = the local UI domain.
+  assert.match(cert.subject, /O=Dhruvanta Systems Private Limited/)
+  assert.equal(LOCAL_UI_CERT_ORG, 'Dhruvanta Systems Private Limited')
+  assert.match(cert.subject, new RegExp(`CN=${LOCAL_UI_DOMAIN.replace(/\./g, '\\.')}`))
 })
 
 test('generateLocalCert issues a long-lived (multi-year) certificate', async () => {
