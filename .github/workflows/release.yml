@@ -368,3 +368,33 @@ jobs:
           $stable = Join-Path (Split-Path "${{ steps.msi.outputs.path }}") "PrintAnywhereAgent.msi"
           Copy-Item "${{ steps.msi.outputs.path }}" $stable -Force
           gh release upload "${{ github.ref_name }}" "${{ steps.msi.outputs.path }}" "$stable" --clobber
+
+      # KAN-451: the `release` job publishes SHA256SUMS.txt covering setup.exe /
+      # zip / etc., but the MSI is built in THIS later job, so its hash was
+      # never in the manifest — breaking manual MSI verification (docs/
+      # download-and-verify.md) and any MSI-based update path. Append the signed
+      # versioned + stable MSI hashes and re-publish. Written with LF endings and
+      # the `sha256sum` "<lowercase-hex><two-spaces><filename>" format so
+      # `sha256sum -c` keeps working; idempotent (drops prior MSI lines first).
+      - name: Add signed MSI to SHA256SUMS.txt
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $versioned = "${{ steps.msi.outputs.path }}"
+          $stable = Join-Path (Split-Path $versioned) "PrintAnywhereAgent.msi"
+          $versionedName = [System.IO.Path]::GetFileName($versioned)
+          $stableName = "PrintAnywhereAgent.msi"
+
+          gh release download "${{ github.ref_name }}" -p SHA256SUMS.txt -O SHA256SUMS.txt --clobber
+
+          $drop = ("  (" + [regex]::Escape($versionedName) + "|" + [regex]::Escape($stableName) + ")$")
+          $lines = @(Get-Content SHA256SUMS.txt | Where-Object { $_ -notmatch $drop })
+          foreach ($f in @($versioned, $stable)) {
+            $hash = (Get-FileHash -Algorithm SHA256 -Path $f).Hash.ToLower()
+            $lines += ("{0}  {1}" -f $hash, [System.IO.Path]::GetFileName($f))
+          }
+          [System.IO.File]::WriteAllText("SHA256SUMS.txt", (($lines -join "`n") + "`n"))
+          Write-Host "Updated SHA256SUMS.txt:"
+          Get-Content SHA256SUMS.txt
+          gh release upload "${{ github.ref_name }}" SHA256SUMS.txt --clobber
